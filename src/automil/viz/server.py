@@ -163,9 +163,10 @@ def cmd_start(port: int = DEFAULT_PORT, project_root: Path | None = None):
     global GRAPH_FILE, PID_FILE, LOG_FILE
     if project_root is None:
         project_root = Path.cwd()
-    GRAPH_FILE = project_root / "graph.json"
-    PID_FILE = project_root / "orchestrator" / "viz_server.pid"
-    LOG_FILE = project_root / "orchestrator" / "viz_server.log"
+    automil_dir = project_root / "automil"
+    GRAPH_FILE = automil_dir / "graph.json"
+    PID_FILE = automil_dir / "orchestrator" / "viz_server.pid"
+    LOG_FILE = automil_dir / "orchestrator" / "viz_server.log"
 
     if PID_FILE.exists():
         pid = int(PID_FILE.read_text().strip())
@@ -185,7 +186,7 @@ def cmd_start(port: int = DEFAULT_PORT, project_root: Path | None = None):
     PID_FILE.write_text(str(os.getpid()) + "\n")
 
     observer = Observer()
-    observer.schedule(watcher, str(project_root), recursive=False)
+    observer.schedule(watcher, str(automil_dir), recursive=False)
     observer.start()
 
     async def run_server():

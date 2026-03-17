@@ -39,13 +39,15 @@ logger = logging.getLogger(__name__)
 
 
 def _find_project_root() -> Path:
-    """Walk up from cwd to find config.yaml (project root marker)."""
+    """Walk up from cwd to find a directory containing automil/config.yaml."""
     p = Path.cwd()
     while p != p.parent:
-        if (p / "config.yaml").exists():
+        if (p / "automil" / "config.yaml").exists():
             return p
         p = p.parent
-    raise FileNotFoundError("No config.yaml found. Are you in an automil project?")
+    raise FileNotFoundError(
+        "No automil/config.yaml found. Run 'automil init' in your project root."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -116,12 +118,13 @@ class ExperimentOrchestrator:
 
     def __init__(self, project_root: Path | None = None):
         self.project_root = project_root or _find_project_root()
-        self.orch_dir = self.project_root / "orchestrator"
+        self.automil_dir = self.project_root / "automil"
+        self.orch_dir = self.automil_dir / "orchestrator"
         self.queue_dir = self.orch_dir / "queue"
         self.running_dir = self.orch_dir / "running"
         self.archive_dir = self.orch_dir / "archive"
         self.completed_dir = self.orch_dir / "completed"
-        self.results_tsv = self.project_root / "results.tsv"
+        self.results_tsv = self.automil_dir / "results.tsv"
         self.pid_file = self.orch_dir / "orchestrator.pid"
         self.log_file = self.orch_dir / "orchestrator.log"
         self.gpu_state_file = self.orch_dir / "gpu_state.json"
@@ -129,7 +132,7 @@ class ExperimentOrchestrator:
         self.runner = Runner(self.project_root)
 
         # Load config
-        config_path = self.project_root / "config.yaml"
+        config_path = self.automil_dir / "config.yaml"
         if config_path.exists():
             try:
                 import yaml

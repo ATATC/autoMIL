@@ -15,13 +15,19 @@ import yaml
 
 
 def _find_project_root() -> Path:
-    """Walk up from cwd to find config.yaml."""
+    """Walk up from cwd to find a directory containing automil/config.yaml."""
     p = Path.cwd()
     while p != p.parent:
-        if (p / "config.yaml").exists():
+        if (p / "automil" / "config.yaml").exists():
             return p
         p = p.parent
-    raise click.ClickException("No config.yaml found. Are you in an automil project?")
+    raise click.ClickException(
+        "No automil/config.yaml found. Run 'automil init' in your project root."
+    )
+
+
+def _automil_dir(root: Path) -> Path:
+    return root / "automil"
 
 
 @click.group()
@@ -31,67 +37,58 @@ def main():
 
 
 @main.command()
-@click.argument("path")
+@click.argument("path", default="automil")
 @click.option("--task", default="binary", help="Task type: binary or multiclass")
 @click.option("--encoder", default="hoptimus1", help="Primary encoder name")
 def init(path: str, task: str, encoder: str):
-    """Scaffold a new autoMIL project."""
+    """Add autoMIL to an existing project."""
     from jinja2 import Environment, FileSystemLoader
 
-    project_dir = Path(path).resolve()
-    if project_dir.exists() and any(project_dir.iterdir()):
-        raise click.ClickException(f"Directory {project_dir} is not empty")
+    project_root = Path.cwd()
+    automil_dir = project_root / path
+
+    # Verify we're in a git repo
+    if not (project_root / ".git").exists():
+        raise click.ClickException(
+            "Not a git repository. Run 'git init' first or cd into your project."
+        )
+
+    if automil_dir.exists() and (automil_dir / "config.yaml").exists():
+        raise click.ClickException(f"autoMIL already initialized at {automil_dir}")
 
     # Create directory structure
-    project_dir.mkdir(parents=True, exist_ok=True)
+    automil_dir.mkdir(parents=True, exist_ok=True)
     for subdir in [
         "orchestrator/queue",
         "orchestrator/running",
         "orchestrator/archive",
         "orchestrator/completed",
     ]:
-        (project_dir / subdir).mkdir(parents=True)
+        (automil_dir / subdir).mkdir(parents=True, exist_ok=True)
 
     # Render templates
     templates_dir = Path(__file__).parent / "templates"
     env = Environment(loader=FileSystemLoader(str(templates_dir)))
-    context = {"task_type": task, "encoder": encoder, "project_name": project_dir.name}
+    context = {
+        "task_type": task,
+        "encoder": encoder,
+        "project_name": project_root.name,
+    }
 
-    for template_name in ["config.yaml.j2", "train.py.j2", "prepare.py.j2",
-                          "program.md.j2", ".gitignore.j2", "learnings.md.j2"]:
-        target_name = template_name.replace(".j2", "")
+    for template_name, target_name in [
+        ("config.yaml.j2", "config.yaml"),
+        ("program.md.j2", "program.md"),
+        ("learnings.md.j2", "learnings.md"),
+        (".gitignore.j2", ".gitignore"),
+    ]:
         template = env.get_template(template_name)
-        (project_dir / target_name).write_text(template.render(**context))
+        (automil_dir / target_name).write_text(template.render(**context))
 
-    # Initialize git repo (handle machines without git identity)
-    subprocess.run(["git", "init"], cwd=project_dir, capture_output=True, check=True)
-
-    # Set local git identity if not globally configured
-    has_name = subprocess.run(
-        ["git", "config", "user.name"], cwd=project_dir, capture_output=True,
-    ).returncode == 0
-    has_email = subprocess.run(
-        ["git", "config", "user.email"], cwd=project_dir, capture_output=True,
-    ).returncode == 0
-    if not has_name:
-        subprocess.run(
-            ["git", "config", "user.name", "automil"],
-            cwd=project_dir, capture_output=True,
-        )
-    if not has_email:
-        subprocess.run(
-            ["git", "config", "user.email", "automil@localhost"],
-            cwd=project_dir, capture_output=True,
-        )
-
-    subprocess.run(["git", "add", "."], cwd=project_dir, capture_output=True, check=True)
-    subprocess.run(
-        ["git", "commit", "-m", "feat: initialize automil project"],
-        cwd=project_dir, capture_output=True, check=True,
-    )
-
-    click.echo(f"Project created at {project_dir}")
-    click.echo("Next: cd into the project and run 'automil orchestrator start'")
+    click.echo(f"autoMIL initialized at {automil_dir}/")
+    click.echo("Next steps:")
+    click.echo(f"  1. Edit {automil_dir}/config.yaml with your project settings")
+    click.echo(f"  2. Run: automil orchestrator start")
+    click.echo(f"  3. Start your coding agent")
 
 
 @main.command()
@@ -109,12 +106,13 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     import hashlib
 
     root = _find_project_root()
+    adir = _automil_dir(root)
 
     # Determine files to snapshot
     if files:
         file_list = list(files)
         # Warn (but allow) if explicit --files includes readonly files
-        config_path = root / "config.yaml"
+        config_path = adir / "config.yaml"
         if config_path.exists():
             config = yaml.safe_load(config_path.read_text())
             readonly = set(config.get("files", {}).get("readonly", []))
@@ -125,7 +123,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         # Auto-detect: use files.editable from config as the default scope,
         # intersected with actually changed files. This prevents capturing
         # unrelated changes in a dirty repo.
-        config_path = root / "config.yaml"
+        config_path = adir / "config.yaml"
         if config_path.exists():
             config = yaml.safe_load(config_path.read_text())
             editable = set(config.get("files", {}).get("editable", []))
@@ -164,7 +162,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     ).stdout.strip()
 
     # Create archive directory and copy files
-    archive = root / "orchestrator" / "archive" / node
+    archive = adir / "orchestrator" / "archive" / node
     archive.mkdir(parents=True, exist_ok=True)
 
     overlay_manifest = {}
@@ -202,7 +200,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
         "submitted_at": datetime.now().isoformat(),
     }
 
-    queue_file = root / "orchestrator" / "queue" / f"{node}.json"
+    queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
     queue_file.write_text(json.dumps(spec, indent=2))
 
     click.echo(f"Submitted {node}: {len(file_list)} file(s) snapshotted")
@@ -216,7 +214,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
 def rank(n: int, max_per_branch: int):
     """Show top-ranked proposals from the experiment graph."""
     root = _find_project_root()
-    graph_path = root / "graph.json"
+    graph_path = _automil_dir(root) / "graph.json"
 
     if not graph_path.exists():
         click.echo("No graph.json found. Run some experiments first.")
@@ -249,7 +247,7 @@ def propose(parent: str, desc: str, techniques: tuple):
     """Add a new experiment proposal to the graph."""
     root = _find_project_root()
     from automil.graph import ExperimentGraph
-    graph = ExperimentGraph(path=str(root / "graph.json"))
+    graph = ExperimentGraph(path=str(_automil_dir(root) / "graph.json"))
     node_id = graph.add_proposed(
         parent_id=parent,
         description=desc,
@@ -263,9 +261,10 @@ def propose(parent: str, desc: str, techniques: tuple):
 def reconcile():
     """Sync experiment graph with orchestrator state."""
     root = _find_project_root()
-    orch = root / "orchestrator"
+    adir = _automil_dir(root)
+    orch = adir / "orchestrator"
     from automil.graph import ExperimentGraph
-    graph = ExperimentGraph(path=str(root / "graph.json"))
+    graph = ExperimentGraph(path=str(adir / "graph.json"))
     graph.reconcile(
         queue_dir=str(orch / "queue"),
         running_dir=str(orch / "running"),
@@ -280,11 +279,12 @@ def reconcile():
 def status():
     """Show experiment status summary."""
     root = _find_project_root()
+    adir = _automil_dir(root)
 
-    queue = list((root / "orchestrator" / "queue").glob("*.json"))
-    completed = list((root / "orchestrator" / "completed").glob("*.json"))
+    queue = list((adir / "orchestrator" / "queue").glob("*.json"))
+    completed = list((adir / "orchestrator" / "completed").glob("*.json"))
 
-    graph_path = root / "graph.json"
+    graph_path = adir / "graph.json"
     if graph_path.exists():
         from automil.graph import ExperimentGraph
         graph = ExperimentGraph(path=str(graph_path))

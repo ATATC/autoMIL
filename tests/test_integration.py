@@ -11,57 +11,68 @@ from click.testing import CliRunner
 from automil.cli import main
 
 
+def _init_git_repo(path: Path):
+    """Initialize a git repo with an initial commit at the given path."""
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "test"],
+        cwd=path, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=path, capture_output=True,
+    )
+    # Create a dummy file and commit so HEAD exists
+    (path / "README.md").write_text("# Test\n")
+    subprocess.run(["git", "add", "."], cwd=path, capture_output=True, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=path, capture_output=True, check=True,
+    )
+
+
 class TestEndToEnd:
-    def test_init_submit_rank_flow(self, tmp_path, monkeypatch):
-        """Full flow: init project, submit experiment, check archive."""
+    def test_init_submit_flow(self, tmp_path, monkeypatch):
+        """Full flow: init in existing repo, submit experiment, check archive."""
         runner = CliRunner()
 
-        # Init project
-        proj = tmp_path / "e2e_test"
-        result = runner.invoke(main, ["init", str(proj)])
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        # Init autoMIL overlay
+        result = runner.invoke(main, ["init"])
         assert result.exit_code == 0, result.output
 
-        monkeypatch.chdir(proj)
+        # Verify automil subdirectory
+        adir = tmp_path / "automil"
+        assert (adir / "config.yaml").exists()
+        assert (adir / "program.md").exists()
+        assert (adir / "learnings.md").exists()
+        assert (adir / ".gitignore").exists()
 
-        # Verify scaffold
-        assert (proj / "config.yaml").exists()
-        assert (proj / "train.py").exists()
-        assert (proj / "prepare.py").exists()
-        assert (proj / "program.md").exists()
-        assert (proj / "learnings.md").exists()
-        assert (proj / ".gitignore").exists()
+        # No train.py or prepare.py
+        assert not (adir / "train.py").exists()
+        assert not (adir / "prepare.py").exists()
+        assert not (tmp_path / "train.py").exists()
+        assert not (tmp_path / "prepare.py").exists()
 
-        # Verify git repo with initial commit
-        git_log = subprocess.run(
-            ["git", "log", "--oneline"], cwd=proj,
-            capture_output=True, text=True,
-        )
-        assert git_log.returncode == 0
-        assert "initialize" in git_log.stdout.lower()
-
-        # Verify runtime files are gitignored
-        git_status = subprocess.run(
-            ["git", "status", "--porcelain"], cwd=proj,
-            capture_output=True, text=True,
-        )
-        assert git_status.stdout.strip() == "", f"Dirty working tree: {git_status.stdout}"
-
-        # Modify train.py and submit
-        (proj / "train.py").write_text("print('experiment 1')\n")
+        # Create a file and submit
+        (tmp_path / "model.py").write_text("print('experiment 1')\n")
         result = runner.invoke(
             main,
             ["submit", "--node", "node_0001", "--desc", "test exp",
-             "--files", "train.py"],
+             "--files", "model.py"],
         )
         assert result.exit_code == 0, result.output
 
         # Verify archive structure
-        archive = proj / "orchestrator" / "archive" / "node_0001"
-        assert (archive / "train.py").exists()
-        assert (archive / "train.py").read_text() == "print('experiment 1')\n"
+        archive = adir / "orchestrator" / "archive" / "node_0001"
+        assert (archive / "model.py").exists()
+        assert (archive / "model.py").read_text() == "print('experiment 1')\n"
 
         # Verify queue spec
-        queue_files = list((proj / "orchestrator" / "queue").glob("*.json"))
+        queue_files = list((adir / "orchestrator" / "queue").glob("*.json"))
         assert len(queue_files) == 1
         spec = json.loads(queue_files[0].read_text())
         assert spec["id"] == "node_0001"
@@ -86,38 +97,38 @@ class TestEndToEnd:
     def test_multiple_submits(self, tmp_path, monkeypatch):
         """Multiple experiments can be submitted sequentially."""
         runner = CliRunner()
-        proj = tmp_path / "multi_test"
-        runner.invoke(main, ["init", str(proj)])
-        monkeypatch.chdir(proj)
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        runner.invoke(main, ["init"])
 
         for i in range(3):
-            (proj / "train.py").write_text(f"print('experiment {i}')\n")
+            (tmp_path / "model.py").write_text(f"print('experiment {i}')\n")
             result = runner.invoke(
                 main,
                 ["submit", "--node", f"node_{i:04d}", "--desc", f"exp {i}",
-                 "--files", "train.py"],
+                 "--files", "model.py"],
             )
             assert result.exit_code == 0, result.output
 
         # All 3 should be in queue
-        queue_files = list((proj / "orchestrator" / "queue").glob("*.json"))
+        queue_files = list((tmp_path / "automil" / "orchestrator" / "queue").glob("*.json"))
         assert len(queue_files) == 3
 
         # All 3 archives should exist with different content
         for i in range(3):
-            archive = proj / "orchestrator" / "archive" / f"node_{i:04d}"
-            assert (archive / "train.py").read_text() == f"print('experiment {i}')\n"
+            archive = tmp_path / "automil" / "orchestrator" / "archive" / f"node_{i:04d}"
+            assert (archive / "model.py").read_text() == f"print('experiment {i}')\n"
 
     def test_propose_and_rank(self, tmp_path, monkeypatch):
         """Propose experiments and rank them."""
         runner = CliRunner()
-        proj = tmp_path / "rank_test"
-        runner.invoke(main, ["init", str(proj)])
-        monkeypatch.chdir(proj)
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        runner.invoke(main, ["init"])
 
         # Create a graph with a root node
         from automil.graph import ExperimentGraph
-        graph = ExperimentGraph(path=str(proj / "graph.json"))
+        graph = ExperimentGraph(path=str(tmp_path / "automil" / "graph.json"))
         root = graph.add_executed(
             parent_id=None,
             description="baseline",
@@ -143,14 +154,14 @@ class TestEndToEnd:
     def test_start_stop_loop(self, tmp_path, monkeypatch):
         """start-loop and stop-loop manage the flag file."""
         runner = CliRunner()
-        proj = tmp_path / "loop_test"
-        runner.invoke(main, ["init", str(proj)])
-        monkeypatch.chdir(proj)
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        runner.invoke(main, ["init"])
 
         result = runner.invoke(main, ["start-loop"])
         assert result.exit_code == 0
-        assert (proj / ".automil_active").exists()
+        assert (tmp_path / ".automil_active").exists()
 
         result = runner.invoke(main, ["stop-loop"])
         assert result.exit_code == 0
-        assert not (proj / ".automil_active").exists()
+        assert not (tmp_path / ".automil_active").exists()

@@ -1,6 +1,10 @@
+# autoMIL Configuration
+# This file configures autoMIL for your project.
+# Edit the paths and settings below for your environment.
+
 project:
   name: "{{ project_name }}"
-  description: "MIL model improvement project"
+  description: "TODO: Describe your task"
 
 task:
   name: "{{ project_name }}"
@@ -20,7 +24,7 @@ encoders:
   primary: "{{ encoder }}"
   available:
     # TODO: Set correct dimension for your encoder
-    {{ encoder }}: 1536  # e.g., hoptimus1=1536, hibou_l=1024, uni_v2=1536
+    {{ encoder }}: 1536
 
 baseline:
   model: "clam_mb"
@@ -44,8 +48,10 @@ training:
   max_seq_length: 4096
 
 files:
-  editable: ["train.py"]
-  readonly: ["prepare.py"]
+  # The agent scopes the codebase and determines what to edit.
+  # These lists guide the agent and control automil submit auto-detect.
+  editable: []       # TODO: list files the agent may modify
+  readonly: []       # TODO: list files the agent should not modify
 
 orchestrator:
   poll_interval_sec: 5

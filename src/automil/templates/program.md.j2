@@ -2,18 +2,28 @@
 
 ## Project: {{ project_name }}
 
-Autonomous research loop for improving MIL models via iterative experimentation.
+Autonomous research loop for improving ML models via iterative experimentation.
 
 ## Restart Protocol
 
 On every session start or context reset:
 
 1. Run `automil reconcile` to sync graph with orchestrator state
-2. Read `graph.json` for experiment tree state
-3. Read `learnings.md` for accumulated insights
-4. Read `config.yaml` for project settings
-5. Read `train.py` for current best training recipe
+2. Read `automil/graph.json` for experiment tree state
+3. Read `automil/learnings.md` for accumulated insights
+4. Read `automil/config.yaml` for project settings
+5. Scope the codebase: read key source files listed in config.yaml
 6. Continue the experiment loop
+
+## Scoping the Codebase
+
+Before starting experiments, the agent should:
+
+1. Read the project structure and understand the codebase
+2. Identify which files are relevant to the ML pipeline (training, data loading,
+   model architecture, loss functions, augmentation, etc.)
+3. Update `automil/config.yaml` with `files.editable` and `files.readonly` lists
+4. Understand the evaluation methodology and baseline performance
 
 ## The Experiment Loop
 
@@ -23,14 +33,14 @@ On every session start or context reset:
 
 1. Run `automil reconcile`
 2. Run `automil rank` to get top proposals. If none, brainstorm new ones.
-3. Read `learnings.md` to avoid repeating failed approaches.
+3. Read `automil/learnings.md` to avoid repeating failed approaches.
 4. For each selected proposal:
-   a. Edit project files (train.py, models, etc.) to implement the idea
+   a. Edit project files to implement the idea
    b. Run `automil submit --node <id> --desc "..." --files <changed files>`
    c. Restore working tree for next experiment
-5. Wait for completion notifications in `orchestrator/completed/`
+5. Wait for completion notifications in `automil/orchestrator/completed/`
 6. Read results, update graph via `automil reconcile`
-7. Update `learnings.md` with insights
+7. Update `automil/learnings.md` with insights
 8. If composite improved: commit the winning changes
 9. If no proposals remain: brainstorm and use `automil propose`
 10. Repeat
