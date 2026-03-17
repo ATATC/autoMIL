@@ -1,0 +1,61 @@
+# autoMIL Project Configuration
+# Copy this file and fill in your project-specific settings.
+
+project:
+  name: "my_project"
+  description: "TODO: Describe your task"
+
+task:
+  name: "TODO"
+  type: "binary"  # or "multiclass"
+  num_classes: 2
+  label_column: "TODO_label"
+  positive_label: 1
+
+data:
+  features_dir: "/TODO/path/to/features/"
+  splits_dir: "/TODO/path/to/splits/"
+  mapping_csv: "/TODO/path/to/mapping.csv"
+  num_folds: 5
+  seed: 42
+
+encoders:
+  primary: "TODO_encoder"
+  available:
+    TODO_encoder: 1536
+
+baseline:
+  model: "clam_mb"
+  framework: "CLAM"
+  test_auc: 0.0
+  composite: 0.0
+
+metrics:
+  primary: "composite"
+  composite_formula: "(test_auc + test_bacc) / 2"
+  track: ["val_auc", "val_bacc", "test_auc", "test_bacc"]
+
+training:
+  learning_rate: 3e-4
+  weight_decay: 1e-4
+  dropout: 0.25
+  num_epochs: 100
+  warmup_epochs: 5
+  patience: 10
+  batch_size: 32
+  max_seq_length: 4096
+
+files:
+  editable: ["train.py"]
+  readonly: ["prepare.py"]
+
+orchestrator:
+  poll_interval_sec: 5
+  safety_margin_gb: 2.0
+  default_timeout_min: 150
+  max_concurrent_per_gpu: 1
+  default_vram_estimate_gb: 0.5
+
+viz:
+  port: 8420
+  host: "0.0.0.0"
