@@ -13,45 +13,65 @@
 git clone https://github.com/your-org/autoMIL.git
 cd autoMIL
 pip install -e .
-# Or with ML dependencies:
-pip install -e ".[ml]"
 ```
 
-## Creating a Project
+## Adding autoMIL to Your Project
+
+autoMIL overlays onto an existing git repository. Navigate to your project
+root and run:
 
 ```bash
-automil init my_project
-cd my_project
+cd /path/to/your/project   # must be a git repo
+automil init
 ```
 
-This creates a git-initialized project with:
-- `config.yaml` - Project configuration (paths, task, encoders, training params)
-- `train.py` - Training script (agent-editable)
-- `prepare.py` - Data loading utilities (typically read-only)
+This creates an `automil/` subdirectory with:
+- `config.yaml` - Project configuration (paths, task, encoders, metrics)
 - `program.md` - Agent instructions for the experiment loop
-- `learnings.md` - Accumulated insights
+- `learnings.md` - Accumulated insights (starts empty)
+- `.gitignore` - Excludes runtime files (graph.json, orchestrator/)
 - `orchestrator/` - Runtime directories for experiment management
+
+Your existing codebase is untouched. The agent will scope it and determine
+what to edit.
 
 ## Configuration
 
-Edit `config.yaml` with your project-specific settings:
+Edit `automil/config.yaml`:
 
 1. **Data paths**: Set `data.features_dir`, `data.splits_dir`, `data.mapping_csv`
 2. **Task**: Set `task.name`, `task.type` (binary/multiclass), `task.label_column`
 3. **Encoders**: List available encoders with their dimensions
 4. **Baseline**: Set your starting performance numbers
+5. **Files**: The agent will populate `files.editable` and `files.readonly`
+   after scoping the codebase, or you can set them manually
 
-## Implementing Data Loading
+## Training Script Contract
 
-Edit `prepare.py` to implement `create_fold_loaders()` for your dataset. This function must return `(train_loader, val_loader, test_loader)` for each fold.
+Your training script must write a `result.json` file to its working directory
+before exiting:
 
-## Setting Up the Model
+```json
+{
+  "status": "completed",
+  "metrics": {
+    "val_auc": 0.870,
+    "val_bacc": 0.810,
+    "test_auc": 0.872,
+    "test_bacc": 0.830
+  },
+  "composite": 0.851,
+  "elapsed_seconds": 4098,
+  "peak_vram_mb": 4500
+}
+```
 
-Edit `train.py` to implement:
-- `create_model()` - Your MIL architecture
-- `train_single_fold()` - The training loop for one fold
+The orchestrator reads `result.json` after the process exits. If the file is
+missing, the experiment is marked as crashed.
 
-The training script must write `result.json` at completion (the template handles this).
+**GPU handling**: The orchestrator sets `CUDA_VISIBLE_DEVICES` to mask the
+physical GPU and `AUTOMIL_GPU=0` (logical device). Your training script
+should use `AUTOMIL_GPU` or simply default to `cuda:0`.
 
 ## Running the Loop
 
@@ -74,7 +94,8 @@ claude
 # Then type: /automil
 ```
 
-**Other agents:** Point them at `program.md` and tell them to follow the instructions.
+**Other agents:** Point them at `automil/program.md` and tell them to follow
+the instructions.
 
 ### 4. Monitor progress
 ```bash
@@ -82,11 +103,21 @@ automil status          # Quick summary
 automil viz start       # 3D dashboard at localhost:8420
 ```
 
+## How Experiments Run
+
+1. The agent edits files in your repo (any files, not just one)
+2. Runs `automil submit --node node_0001 --desc "try focal loss" --files train.py models/clam.py`
+3. The CLI snapshots only the changed files to `automil/orchestrator/archive/node_0001/`
+4. The orchestrator creates a git worktree at the base commit, overlays the changed files
+5. The experiment runs in isolation on a GPU
+6. Results appear in `automil/orchestrator/completed/`
+7. The agent runs `automil reconcile` to update the experiment graph
+
 ## CLI Reference
 
 | Command | Description |
 |---------|-------------|
-| `automil init <path>` | Create a new project |
+| `automil init` | Add autoMIL to current git repo |
 | `automil submit --node <id> --desc "..." --files <f>` | Queue an experiment |
 | `automil rank` | Show top-ranked proposals |
 | `automil propose --parent <id> --desc "..."` | Add a proposal |
@@ -99,7 +130,7 @@ automil viz start       # 3D dashboard at localhost:8420
 
 ## Examples
 
-See `examples/` for complete worked examples:
-- `ovarian_hrd/` - Binary classification with 189 experiments
-- `clwd/` - Multi-class lung adenocarcinoma subtyping
-- `placeholder/` - Minimal template to start from
+See `examples/` for reference configurations:
+- `ovarian_hrd/automil/` - Binary classification with 189 experiments
+- `clwd/automil/` - Multi-class lung adenocarcinoma subtyping
+- `placeholder/automil/` - Minimal template

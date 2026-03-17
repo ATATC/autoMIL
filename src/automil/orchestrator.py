@@ -45,7 +45,7 @@ def _find_project_root() -> Path:
         if (p / "automil" / "config.yaml").exists():
             return p
         p = p.parent
-    raise FileNotFoundError(
+    raise RuntimeError(
         "No automil/config.yaml found. Run 'automil init' in your project root."
     )
 

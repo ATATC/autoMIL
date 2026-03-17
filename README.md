@@ -2,15 +2,20 @@
 
 Autonomous agent-driven Multiple Instance Learning for computational pathology.
 
-autoMIL pairs a coding agent with a GPU scheduler to autonomously explore MIL architectures, hyperparameters, and training strategies. The agent proposes experiments, the orchestrator runs them, and results feed back into the next iteration.
+autoMIL overlays onto your existing ML project, enabling any coding agent to
+autonomously explore architectures, hyperparameters, and training strategies.
+The agent edits your codebase, the orchestrator runs experiments on GPUs in
+parallel, and results feed back into the next iteration.
 
 ## Features
 
-- **Agent-agnostic**: Works with Claude Code, Cursor, Codex, Aider, Windsurf, or any agent with file and shell access
-- **Experiment graph**: DAG-based tracking of experiment lineage, proposals, and results
-- **GPU orchestrator**: Background scheduler that queues and runs training jobs
-- **3D visualization**: Interactive dashboard for exploring the experiment landscape
-- **CLI-driven**: All operations available via the `automil` command
+- **Repo overlay**: Adds to your existing project, the agent can modify any file
+- **Agent-agnostic**: Works with Claude Code, Cursor, Codex, Aider, or any agent with file and shell access
+- **Experiment graph**: Tree-based tracking with UCB-inspired scoring for multi-branch exploration
+- **Git worktree isolation**: Each experiment runs in a snapshot, only changed files are stored
+- **GPU orchestrator**: Background scheduler with best-fit bin packing across GPUs
+- **3D visualization**: Interactive dashboard for exploring the experiment tree
+- **Persistent knowledge**: Learnings accumulate across sessions via learnings.md
 
 ## Installation
 
@@ -21,21 +26,26 @@ pip install -e .
 ## Quick Start
 
 ```bash
-automil init my_project
-cd my_project
-automil orchestrator start
-# Start your coding agent and run the experiment loop
+cd /path/to/your/project    # an existing git repo
+automil init                 # adds automil/ subdirectory
+# edit automil/config.yaml with your project settings
+automil orchestrator start   # start GPU scheduler
+# launch your coding agent (e.g., claude, cursor)
 ```
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) - Full setup, configuration, and first run
-- [Agent Compatibility](docs/agent-compatibility.md) - Setup guides for different coding agents
+- [Getting Started](docs/getting-started.md) - Setup, configuration, and usage
+- [Agent Compatibility](docs/agent-compatibility.md) - Guides for different coding agents
+- [Implementation Report](docs/implementation-report.md) - Architecture and design decisions
 
 ## Examples
 
-See `examples/` for complete worked examples including ovarian cancer HRD classification and lung adenocarcinoma subtyping.
+See `examples/` for reference configurations:
+- `ovarian_hrd/` - Binary classification with 189 autonomous experiments
+- `clwd/` - Multi-class lung adenocarcinoma subtyping
+- `placeholder/` - Minimal template
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+Apache 2.0. See [LICENSE](LICENSE).

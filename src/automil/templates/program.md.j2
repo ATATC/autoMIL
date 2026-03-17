@@ -46,3 +46,20 @@ Before starting experiments, the agent should:
 10. Repeat
 
 **NEVER STOP** while `.automil_active` exists.
+
+## GPU Handling
+
+The orchestrator sets `CUDA_VISIBLE_DEVICES` to mask the assigned physical GPU.
+Inside the experiment process, the visible device is always logical `0`. The
+environment variable `AUTOMIL_GPU` is set to `0`. Training scripts should use
+`os.environ.get("AUTOMIL_GPU", "0")` or simply target `cuda:0`.
+
+## Keep/Discard Rules
+
+The framework computes keep/discard via Pareto dominance after each experiment:
+- **Keep**: the experiment strictly improves composite AND does not regress on
+  any tracked metric (test_auc, test_bacc) compared to its parent
+- **Discard**: equal or worse performance on any metric
+
+The training script does not make this decision. It only writes raw metrics
+to `result.json`.
