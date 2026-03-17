@@ -1,38 +1,51 @@
 ---
 name: automil
-description: Start or stop the autonomous MIL experiment loop
+description: Run the autonomous MIL experiment loop. Requires setup first (use /automil-setup).
 ---
 
-# autoMIL Skill
+# autoMIL Experiment Loop
 
-## First-time setup
+Run the autonomous experiment loop. Setup must be completed first via
+`/automil-setup`.
 
-If `automil/config.yaml` doesn't exist or has placeholder values:
+## Pre-flight
 
-1. Run `automil init` (if not already done)
-2. Follow Phase 1 (Setup) in `automil/program.md`:
-   - Scope the codebase
-   - Configure `automil/config.yaml` (especially `run.script` and `files.editable`)
-   - Verify the training script writes `result.json`
-   - Run `automil check` to validate
-   - Establish baseline via `automil submit`
-3. Run `automil start-loop`
-4. Start `automil orchestrator start`
+1. Verify setup: `automil check` (must pass with no issues)
+2. Start orchestrator: `automil orchestrator start`
+3. Start loop flag: `automil start-loop`
 
-## Resuming the loop
+## Run
 
-1. Read `automil/config.yaml`, `automil/graph.json`, `automil/learnings.md`, `automil/program.md`
-2. Run `automil reconcile`
-3. Continue the experiment loop (Phase 2 in program.md)
+1. Read `automil/config.yaml`, `automil/graph.json`, `automil/learnings.md`
+2. Read the training script and key source files from `files.editable`
+3. Run `automil reconcile` to sync graph state
 
-## Stopping
+Then follow Phase 2 in `automil/program.md`:
 
-Run `automil stop-loop` to allow the agent to exit.
+**LOOP FOREVER:**
+
+1. `automil reconcile`
+2. `automil rank` to get top proposals. If none, brainstorm new ones.
+3. Read `automil/learnings.md` to avoid repeating failures.
+4. For each proposal:
+   a. Edit project files to implement the idea
+   b. `automil submit --node <id> --desc "..." --files <changed files>`
+   c. Restore working tree: `git checkout -- <files>`
+5. Wait for completions in `automil/orchestrator/completed/`
+6. `automil reconcile` to update graph
+7. Update `automil/learnings.md`
+8. If improved: commit winning changes
+9. If no proposals: brainstorm, `automil propose`
+10. Repeat
 
 ## Rules
 
-- Follow `automil/program.md` exactly
-- Use `automil submit` to queue experiments
-- Use `automil rank` to get top proposals
-- Use `automil reconcile` to sync state
 - NEVER STOP while `.automil_active` exists
+- Use `automil submit` for every experiment (not manual runs)
+- Use `automil rank` to pick experiments (not random)
+- Update `automil/learnings.md` after every result
+- Commit winning experiments to git
+
+## Stopping
+
+User runs `automil stop-loop` to allow the agent to exit.
