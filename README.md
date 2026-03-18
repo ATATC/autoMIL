@@ -89,9 +89,13 @@ autoMIL gives coding agents the infrastructure to run experiments autonomously:
 ### 1. Install
 
 ```bash
+# Install as a global CLI tool (recommended)
+uv tool install git+https://github.com/leoyin1127/autoMIL.git
+
+# Or install from a local clone
 git clone https://github.com/leoyin1127/autoMIL.git
 cd autoMIL
-pip install -e .
+uv tool install -e .
 ```
 
 ### 2. Initialize in your project
