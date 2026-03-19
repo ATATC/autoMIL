@@ -110,6 +110,34 @@ class TestCheck:
         assert result.exit_code == 0
         assert "placeholder" in result.output.lower() or "ISSUES" in result.output
 
+    def test_check_accepts_existing_relative_data_paths(self, cli_runner, tmp_path, monkeypatch):
+        """Relative data paths should be resolved from the project root."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        features_dir = tmp_path / "data" / "features"
+        splits_dir = tmp_path / "data" / "splits"
+        mapping_csv = tmp_path / "data" / "mapping.csv"
+        features_dir.mkdir(parents=True)
+        splits_dir.mkdir(parents=True)
+        mapping_csv.write_text("slide_id,label\n")
+
+        config_path = tmp_path / "automil" / "config.yaml"
+        config_text = config_path.read_text()
+        config_text = config_text.replace("/path/to/features/", "data/features")
+        config_text = config_text.replace("/path/to/splits/", "data/splits")
+        config_text = config_text.replace("/path/to/mapping.csv", "data/mapping.csv")
+        (tmp_path / "train.py").write_text("open('result.json', 'w').write('{}')\n")
+        config_text = config_text.replace('script: "train.py"', 'script: "train.py"')
+        config_path.write_text(config_text)
+
+        result = cli_runner.invoke(main, ["check"])
+        assert result.exit_code == 0
+        assert "data.features_dir path does not exist" not in result.output
+        assert "data.splits_dir path does not exist" not in result.output
+        assert "data.mapping_csv path does not exist" not in result.output
+
 
 class TestSubmit:
     def test_submit_captures_files(self, cli_runner, tmp_path, monkeypatch):
@@ -140,6 +168,52 @@ class TestSubmit:
         spec = json.loads(queue_files[0].read_text())
         assert spec["id"] == "node_0001"
         assert "base_commit" in spec
+
+    def test_submit_auto_detect_supports_directory_scopes(self, cli_runner, tmp_path, monkeypatch):
+        """Directory scopes in files.editable should capture changed files beneath them."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        config_path = tmp_path / "automil" / "config.yaml"
+        config_text = config_path.read_text().replace("editable: []", 'editable: ["models/"]')
+        config_path.write_text(config_text)
+
+        (tmp_path / "models").mkdir()
+        (tmp_path / "models" / "custom.py").write_text("print('changed')\n")
+        (tmp_path / "notes.txt").write_text("ignore me\n")
+
+        result = cli_runner.invoke(
+            main,
+            ["submit", "--node", "node_scope", "--desc", "dir scope"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+
+        archive = tmp_path / "automil" / "orchestrator" / "archive" / "node_scope"
+        assert (archive / "models" / "custom.py").exists()
+        assert not (archive / "notes.txt").exists()
+
+    def test_submit_warns_for_readonly_glob(self, cli_runner, tmp_path, monkeypatch):
+        """Readonly glob patterns should warn when explicit files match them."""
+        _init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+        cli_runner.invoke(main, ["init"])
+
+        config_path = tmp_path / "automil" / "config.yaml"
+        config_text = config_path.read_text().replace("readonly: []", 'readonly: ["data/*.py"]')
+        config_path.write_text(config_text)
+
+        (tmp_path / "data").mkdir()
+        (tmp_path / "data" / "prepare.py").write_text("print('readonly')\n")
+
+        result = cli_runner.invoke(
+            main,
+            ["submit", "--node", "node_ro", "--desc", "readonly", "--files", "data/prepare.py"],
+            catch_exceptions=False,
+        )
+        assert result.exit_code == 0
+        assert "marked readonly" in result.output
 
 
 class TestRank:
