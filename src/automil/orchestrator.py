@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -368,7 +369,7 @@ class ExperimentOrchestrator:
         log_fh = open(log_path, "w")
         try:
             if self.run_command:
-                cmd = self.run_command.split()
+                cmd = shlex.split(self.run_command)
             else:
                 cmd = [sys.executable, self.run_script]
             process = subprocess.Popen(
