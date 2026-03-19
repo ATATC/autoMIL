@@ -130,8 +130,8 @@ run:
   script: "train.py"          # your training script (any name)
 
 files:
-  editable: ["train.py", "models/"]   # what the agent can modify
-  readonly: ["evaluate.py"]           # what must not change
+  editable: ["train.py", "models/", "losses/*.py"]   # files, dirs, or globs
+  readonly: ["evaluate.py"]                          # what must not change
 
 baseline:
   composite: 0.814             # your starting performance
@@ -149,8 +149,8 @@ automil check
 ### 4. Run
 
 ```bash
-automil orchestrator start   # GPU scheduler
-automil viz start            # 3D dashboard at localhost:8420 (optional)
+automil orchestrator start   # run in a separate terminal/session
+automil viz start            # dashboard at localhost:8420 (optional)
 ```
 
 ```bash

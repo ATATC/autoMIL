@@ -30,7 +30,8 @@ Then follow Phase 2 in `automil/program.md`:
 4. For each proposal:
    a. Edit project files to implement the idea
    b. `automil submit --node <id> --desc "..." --files <changed files>`
-   c. Restore working tree: `git checkout -- <files>`
+   c. Clean up only the changes created for that proposal. Do not use destructive
+      restore commands that may discard unrelated local work.
 5. Wait for completions in `automil/orchestrator/completed/`
 6. `automil reconcile` to update graph
 7. Update `automil/learnings.md`

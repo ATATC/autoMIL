@@ -52,7 +52,8 @@ Edit `automil/config.yaml`:
 3. **Encoders**: List available encoders with their dimensions
 4. **Baseline**: Set your starting performance numbers
 5. **Files**: The agent will populate `files.editable` and `files.readonly`
-   after scoping the codebase, or you can set them manually
+   after scoping the codebase, or you can set them manually with file paths,
+   directory prefixes ending in `/`, or globs such as `losses/*.py`
 
 ## Training Script Contract
 
@@ -87,6 +88,9 @@ should use `AUTOMIL_GPU` or simply default to `cuda:0`.
 ```bash
 automil orchestrator start
 ```
+
+Run it in a separate terminal/session; it stays in the foreground while
+scheduling experiments.
 
 ### 2. Start the visualization dashboard (optional)
 ```bash
