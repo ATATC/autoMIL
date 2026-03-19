@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import shutil
@@ -28,6 +29,26 @@ def _find_project_root() -> Path:
 
 def _automil_dir(root: Path) -> Path:
     return root / "automil"
+
+
+def _matches_scope(path: str, patterns: list[str] | set[str]) -> bool:
+    """Return whether a relative path matches any configured scope pattern.
+
+    Supports exact file paths, directory prefixes ending in ``/``, and glob
+    patterns such as ``data/*.py``.
+    """
+    rel_path = Path(path).as_posix()
+    for raw_pattern in patterns:
+        pattern = str(raw_pattern).strip().replace("\\", "/")
+        if not pattern:
+            continue
+        if pattern.endswith("/"):
+            if rel_path.startswith(pattern):
+                return True
+            continue
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+    return False
 
 
 @click.group()
@@ -175,7 +196,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
             config = yaml.safe_load(config_path.read_text())
             readonly = set(config.get("files", {}).get("readonly", []))
             for f in file_list:
-                if f in readonly:
+                if _matches_scope(f, readonly):
                     click.echo(f"Warning: {f} is marked readonly in config.yaml (submitting anyway)")
     else:
         # Auto-detect: use files.editable from config as the default scope,
@@ -205,8 +226,8 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
 
         if editable:
             # Only capture files that are both editable AND changed
-            file_list = [f for f in all_changed if f in editable]
-            skipped = [f for f in all_changed if f not in editable]
+            file_list = [f for f in all_changed if _matches_scope(f, editable)]
+            skipped = [f for f in all_changed if not _matches_scope(f, editable)]
             if skipped:
                 click.echo(f"Skipping {len(skipped)} non-editable changed file(s). "
                            f"Use --files to override.")
@@ -436,8 +457,12 @@ def check():
             path = config.get("data", {}).get(key, "")
             if path and path.startswith("/path/to"):
                 issues.append(f"data.{key} is still a placeholder: {path}")
-            elif path and not Path(path).exists():
-                warnings.append(f"data.{key} path does not exist: {path}")
+            elif path:
+                resolved = Path(path)
+                if not resolved.is_absolute():
+                    resolved = root / resolved
+                if not resolved.exists():
+                    warnings.append(f"data.{key} path does not exist: {path}")
 
         # Check files.editable
         editable = config.get("files", {}).get("editable", [])
