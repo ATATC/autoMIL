@@ -4,7 +4,7 @@ SMMILe expects two .npy files per slide:
   1. Feature file: dict with 'feature' (C, H, W), 'index' (N, 2), 'inst_label', 'mask' (H, W)
   2. Superpixel file: dict with 'm_slic' (H, W), 'm_adj' (n_sp, n_sp)
 
-Our H5 files have: 'features' (N, embed_dim) and 'coords' (N, 2) with 256px spacing.
+Our H5 files have: 'features' (N, embed_dim) and 'coords' (N, 2) with 224px spacing.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def _build_nic_grid(
 def convert_h5_to_nic(
     h5_path: str,
     output_dir: str,
-    patch_size: int = 256,
+    patch_size: int = 224,
 ) -> str:
     """Convert a single H5 feature file to SMMILe NIC .npy format.
 
@@ -89,7 +89,7 @@ def convert_h5_to_nic(
 def convert_all_h5_to_nic(
     h5_dir: str,
     output_dir: str,
-    patch_size: int = 256,
+    patch_size: int = 224,
 ) -> list[str]:
     """Batch convert all H5 files in a directory to NIC .npy format."""
     os.makedirs(output_dir, exist_ok=True)
@@ -199,7 +199,7 @@ def prepare_smmile_data(
     features_base_dir: str,
     smmile_dir: str,
     encoder_keys: list[str],
-    patch_size: int = 256,
+    patch_size: int = 224,
     n_segments_per_sp: int = 16,
     compactness: int = 50,
 ) -> None:

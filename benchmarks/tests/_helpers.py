@@ -72,7 +72,7 @@ def make_test_ds(**kwargs):
             "wikg_mil", "ilra_mil", "rrt", "vision_transformer",
         ],
         magnification=20,
-        patch_size=256,
+        patch_size=224,
         batch_size=64,
     )
     defaults.update(kwargs)

@@ -41,6 +41,6 @@ class SMMILeConfig:
     tau: float = 0.1
 
     # Data
-    patch_size: int = 256
+    patch_size: int = 224
     n_segments_per_sp: int = 16
     compactness: int = 50

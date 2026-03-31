@@ -14,7 +14,7 @@ paths:
   mapping_csv: "${data_root}/metadata.csv"
   output_dir: "${data_root}/trident_output"
   benchmark_dir: "${data_root}/benchmark"
-  features_base_dir: "${output_dir}/20x_256px_0px_overlap"
+  features_base_dir: "${output_dir}/20x_224px_0px_overlap"
 
 tasks:
   # Define your classification task(s) here.
@@ -62,5 +62,5 @@ nnmil_models:
 
 extraction:
   magnification: 20
-  patch_size: 256
+  patch_size: 224
   batch_size: 64

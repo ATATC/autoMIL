@@ -21,7 +21,7 @@ def tmp_dirs(tmp_path):
     n_patches = 20
     embed_dim = 768
     coords = np.array(
-        [[r * 256, c * 256] for r in range(5) for c in range(4)],
+        [[r * 224, c * 224] for r in range(5) for c in range(4)],
         dtype=np.int64,
     )
     features = np.random.randn(n_patches, embed_dim).astype(np.float32)
@@ -48,9 +48,9 @@ class TestH5ToNIC:
         convert_h5_to_nic(
             h5_path=tmp_dirs["h5_path"],
             output_dir=tmp_dirs["npy_dir"],
-            patch_size=256,
+            patch_size=224,
         )
-        out_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_256.npy")
+        out_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_224.npy")
         assert os.path.exists(out_path)
 
         record = np.load(out_path, allow_pickle=True)[()]
@@ -73,9 +73,9 @@ class TestH5ToNIC:
         convert_h5_to_nic(
             h5_path=tmp_dirs["h5_path"],
             output_dir=tmp_dirs["npy_dir"],
-            patch_size=256,
+            patch_size=224,
         )
-        out_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_256.npy")
+        out_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_224.npy")
         record = np.load(out_path, allow_pickle=True)[()]
 
         # 5 rows x 4 cols grid
@@ -88,7 +88,7 @@ class TestH5ToNIC:
         convert_all_h5_to_nic(
             h5_dir=tmp_dirs["h5_dir"],
             output_dir=tmp_dirs["npy_dir"],
-            patch_size=256,
+            patch_size=224,
         )
         npy_files = [f for f in os.listdir(tmp_dirs["npy_dir"]) if f.endswith(".npy")]
         assert len(npy_files) == 1
@@ -104,16 +104,16 @@ class TestSuperpixelGeneration:
         convert_h5_to_nic(
             h5_path=tmp_dirs["h5_path"],
             output_dir=tmp_dirs["npy_dir"],
-            patch_size=256,
+            patch_size=224,
         )
-        npy_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_256.npy")
+        npy_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_224.npy")
         generate_superpixels(
             npy_path=npy_path,
             output_dir=tmp_dirs["sp_dir"],
             n_segments_per_sp=4,
             compactness=50,
         )
-        sp_path = os.path.join(tmp_dirs["sp_dir"], "slide_test_0_256.npy")
+        sp_path = os.path.join(tmp_dirs["sp_dir"], "slide_test_0_224.npy")
         assert os.path.exists(sp_path)
 
         sp_record = np.load(sp_path, allow_pickle=True)[()]
@@ -134,9 +134,9 @@ class TestSuperpixelGeneration:
         convert_h5_to_nic(
             h5_path=tmp_dirs["h5_path"],
             output_dir=tmp_dirs["npy_dir"],
-            patch_size=256,
+            patch_size=224,
         )
-        npy_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_256.npy")
+        npy_path = os.path.join(tmp_dirs["npy_dir"], "slide_test_0_224.npy")
         record = np.load(npy_path, allow_pickle=True)[()]
 
         generate_superpixels(
@@ -145,7 +145,7 @@ class TestSuperpixelGeneration:
             n_segments_per_sp=4,
             compactness=50,
         )
-        sp_path = os.path.join(tmp_dirs["sp_dir"], "slide_test_0_256.npy")
+        sp_path = os.path.join(tmp_dirs["sp_dir"], "slide_test_0_224.npy")
         sp_record = np.load(sp_path, allow_pickle=True)[()]
 
         # SLIC output shape should match feature grid (H, W), not transposed

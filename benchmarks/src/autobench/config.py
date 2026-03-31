@@ -129,7 +129,7 @@ class DatasetConfig:
 
     # Extraction params
     magnification: int = 20
-    patch_size: int = 256
+    patch_size: int = 224
     batch_size: int = 64
 
     # CLAM model types (universal across datasets)
@@ -240,7 +240,7 @@ def load_dataset_config(name_or_path: str) -> DatasetConfig:
         encoder_dims=encoder_dims,
         nnmil_models=nnmil_models,
         magnification=extraction.get("magnification", 20),
-        patch_size=extraction.get("patch_size", 256),
+        patch_size=extraction.get("patch_size", 224),
         batch_size=extraction.get("batch_size", 64),
         clam_models=raw.get("clam_models", ["clam_sb", "clam_mb", "mil"]),
     )

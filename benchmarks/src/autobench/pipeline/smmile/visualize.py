@@ -33,7 +33,7 @@ def generate_slide_heatmap(
     npz_path: str,
     svs_path: str,
     output_path: str,
-    patch_size: int = 256,
+    patch_size: int = 224,
     thumbnail_max_dim: int = 2048,
     cmap: str = "RdYlBu_r",
     alpha: float = 0.5,

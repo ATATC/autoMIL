@@ -35,7 +35,7 @@ class SMMILeDataset(Dataset):
         slide_data: pd.DataFrame,
         npy_dir: str,
         sp_dir: str,
-        patch_size: int = 256,
+        patch_size: int = 224,
     ):
         self.slide_data = slide_data.reset_index(drop=True)
         self.npy_dir = npy_dir
@@ -137,7 +137,7 @@ def create_smmile_split(
     split_csv: str,
     npy_dir: str,
     sp_dir: str,
-    patch_size: int = 256,
+    patch_size: int = 224,
 ) -> tuple[SMMILeDataset, SMMILeDataset, SMMILeDataset]:
     """Create train/val/test SMMILeDataset splits from a split CSV."""
     splits = pd.read_csv(split_csv, dtype=str)

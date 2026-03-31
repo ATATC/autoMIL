@@ -66,7 +66,7 @@ class TestExtractionParams:
 
     def test_patch_size(self):
         ds = make_test_ds()
-        assert ds.patch_size == 256
+        assert ds.patch_size == 224
 
     def test_batch_size(self):
         ds = make_test_ds()
