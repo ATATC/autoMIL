@@ -1,15 +1,16 @@
 #!/bin/bash
-# SLURM job script: WSI feature extraction for CLWD on Fir HPC
+# SLURM job script: WSI feature extraction on Fir HPC
 #
 # Extracts patch-level features from whole-slide images using pathology
 # foundation models via TRIDENT. Runs all encoders sequentially on 1 GPU.
 #
-# Priority order: virchow2, uni_v2, hoptimus1, then hibou_l, conch_v15, midnight12k, h0_mini
-#
 # Usage:
-#   sbatch benchmarks/scripts/submit_feature_extraction.sh
+#   sbatch benchmarks/scripts/submit_feature_extraction.sh <dataset>
+#   sbatch benchmarks/scripts/submit_feature_extraction.sh clwd
+#   sbatch benchmarks/scripts/submit_feature_extraction.sh ccrcc
+#   sbatch benchmarks/scripts/submit_feature_extraction.sh hancock
 
-#SBATCH --job-name=clwd_extract
+#SBATCH --job-name=wsi_extract
 #SBATCH --account=def-wanglab
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
@@ -23,13 +24,15 @@
 #SBATCH --mail-user=leo.yin@mail.utoronto.ca
 #SBATCH --exclude=fc10512
 
+# ==================== DATASET ARG ====================
+DATASET="${1:?Usage: sbatch $0 <dataset>  (e.g., clwd, ccrcc, ovarian)}"
+
 # ==================== CONFIG ====================
-DATASET="clwd"
 PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
 
 # ==================== JOB INFO ====================
 echo "================================================"
-echo "AutoBench Feature Extraction — CLWD"
+echo "AutoBench Feature Extraction — ${DATASET}"
 echo "================================================"
 echo "Job ID:    $SLURM_JOB_ID"
 echo "Dataset:   $DATASET"
@@ -74,22 +77,9 @@ else:
     import sys; sys.exit(1)
 " || { echo "ERROR: CUDA not available. Aborting."; exit 1; }
 
-# ==================== VALIDATION ====================
-echo ""
-echo "Validating dataset config..."
-python -c "
-from autobench.config import load_dataset_config
-ds = load_dataset_config('${DATASET}')
-print(f'  Dataset:  {ds.name}')
-print(f'  WSI dir:  {ds.wsi_dir}')
-print(f'  Output:   {ds.output_dir}')
-print(f'  Encoders: {list(ds.encoder_models.values())}')
-" || { echo "ERROR: Failed to load dataset config"; exit 1; }
-
 # ==================== RUN ====================
 echo ""
 echo "Starting feature extraction..."
-echo "Priority: virchow2 > uni_v2 > hoptimus1 > hibou_l > conch_v15 > midnight12k > h0_mini"
 echo "================================================"
 
 python benchmarks/scripts/run_feature_extraction.py \
