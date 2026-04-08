@@ -10,9 +10,16 @@ Run the autonomous experiment loop. Setup must be completed first via
 
 ## Pre-flight
 
-1. Verify setup: `automil check` (must pass with no issues)
-2. Start orchestrator: `automil orchestrator start`
-3. Start loop flag: `automil start-loop`
+1. `cd` to the directory containing `automil/config.yaml`
+2. Verify setup: `automil check` (must pass with no issues)
+3. Start orchestrator: `automil orchestrator start`
+4. Start loop flag: `automil start-loop`
+
+## Important: File paths are git-root-relative
+
+All file paths in `files.editable`, `automil submit --files`, and `run.command`
+are relative to the **git repo root**, not to where automil/ lives. The
+orchestrator creates worktrees from the git root, so overlay paths must match.
 
 ## Run
 
@@ -30,8 +37,7 @@ Then follow Phase 2 in `automil/program.md`:
 4. For each proposal:
    a. Edit project files to implement the idea
    b. `automil submit --node <id> --desc "..." --files <changed files>`
-   c. Clean up only the changes created for that proposal. Do not use destructive
-      restore commands that may discard unrelated local work.
+   c. Restore working tree: `git checkout -- <files>`
 5. Wait for completions in `automil/orchestrator/completed/`
 6. `automil reconcile` to update graph
 7. Update `automil/learnings.md`
@@ -46,6 +52,7 @@ Then follow Phase 2 in `automil/program.md`:
 - Use `automil rank` to pick experiments (not random)
 - Update `automil/learnings.md` after every result
 - Commit winning experiments to git
+- File paths in submit --files must be relative to git repo root
 
 ## Stopping
 
