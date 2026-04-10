@@ -182,6 +182,10 @@ class ExperimentOrchestrator:
             logger.warning("No GPUs detected, using GPU 0 as fallback")
             self.gpu_allocations[0] = []
 
+        # Load .env from project root so worktree processes inherit env vars
+        # (worktrees don't contain .env since it's typically gitignored)
+        self._load_dotenv()
+
         # Ensure directories
         for d in (self.queue_dir, self.running_dir, self.archive_dir, self.completed_dir):
             d.mkdir(parents=True, exist_ok=True)
@@ -211,6 +215,36 @@ class ExperimentOrchestrator:
                     except ValueError:
                         orch[key] = val
         return {"orchestrator": orch}
+
+    def _load_dotenv(self) -> None:
+        """Load .env files from the project root into os.environ.
+
+        Worktrees are detached git checkouts and don't contain .env
+        (which is typically gitignored).  Loading here ensures the
+        orchestrator's child processes inherit the variables.
+        """
+        # Search common .env locations relative to the project root
+        candidates = [
+            self.project_root / ".env",
+            self.project_root / "benchmarks" / ".env",
+        ]
+        for env_file in candidates:
+            if not env_file.is_file():
+                continue
+            for line in env_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip()
+                if not key:
+                    continue
+                # Don't override existing env vars
+                if key not in os.environ:
+                    os.environ[key] = value
+                    logger.debug("Loaded env var %s from %s", key, env_file)
 
     # --- State persistence ---
 
