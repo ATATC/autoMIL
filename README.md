@@ -152,13 +152,22 @@ automil check
 
 ### 4. Run
 
-```bash
-automil orchestrator start   # run in a separate terminal/session
-automil viz start            # dashboard at localhost:8420 (optional)
-```
+Use **tmux** to keep the orchestrator and agent running in the background:
 
 ```bash
-claude                       # or any coding agent
+# Terminal 1: orchestrator (must stay running)
+tmux new -s orchestrator
+automil orchestrator start
+# Ctrl-b d to detach
+
+# Terminal 2: visualization (optional)
+tmux new -s viz
+automil viz start            # dashboard at localhost:8420
+# Ctrl-b d to detach
+
+# Terminal 3: agent loop
+tmux new -s automil
+claude --dangerously-skip-permissions   # autonomous mode, no permission prompts
 # Type: /automil
 ```
 

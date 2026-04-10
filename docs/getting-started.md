@@ -87,27 +87,34 @@ should use `AUTOMIL_GPU` or simply default to `cuda:0`.
 
 ## Running the Loop
 
+We recommend using **tmux** so processes survive terminal disconnects.
+
 ### 1. Start the orchestrator
 ```bash
+tmux new -s orchestrator
 automil orchestrator start
+# Ctrl-b d to detach
 ```
-
-Run it in a separate terminal/session; it stays in the foreground while
-scheduling experiments.
 
 ### 2. Start the visualization dashboard (optional)
 ```bash
+tmux new -s viz
 automil viz start
 # Open http://localhost:8420 in your browser
+# Ctrl-b d to detach
 ```
 
 ### 3. Launch your coding agent
 
-**Claude Code:**
+**Claude Code (recommended):**
 ```bash
-claude
+tmux new -s automil
+claude --dangerously-skip-permissions   # autonomous mode, no permission prompts
 # Then type: /automil
 ```
+
+The `--dangerously-skip-permissions` flag lets the agent run autonomously
+without pausing for tool approvals. Use this when you want unattended operation.
 
 **Other agents:** Point them at `automil/program.md` and tell them to follow
 the instructions.

@@ -12,8 +12,20 @@ Run the autonomous experiment loop. Setup must be completed first via
 
 1. `cd` to the directory containing `automil/config.yaml`
 2. Verify setup: `uv run automil check` (must pass with no issues)
-3. Start orchestrator: `uv run automil orchestrator start`
-4. Start loop flag: `uv run automil start-loop`
+3. Start orchestrator in a **tmux** session (it must stay running):
+   ```bash
+   tmux new -s orchestrator
+   uv run automil orchestrator start
+   # Ctrl-b d to detach
+   ```
+4. Start the agent loop in another tmux session with `--dangerously-skip-permissions`
+   so it can run autonomously without prompts:
+   ```bash
+   tmux new -s automil
+   claude --dangerously-skip-permissions
+   # Then type: /automil
+   ```
+5. Start loop flag: `uv run automil start-loop`
 
 ## Important: File paths are git-root-relative
 
