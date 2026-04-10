@@ -19,6 +19,9 @@ cd autoMIL
 uv tool install -e .
 ```
 
+> **Note:** If you haven't installed `automil` globally via `uv tool install`,
+> prefix all commands with `uv run` (e.g., `uv run automil init`).
+
 ## Adding autoMIL to Your Project
 
 autoMIL overlays onto an existing git repository. Navigate to your project

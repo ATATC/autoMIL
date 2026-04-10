@@ -42,21 +42,12 @@ module load python/3.11   # or whatever version is available (>=3.10)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc  # or restart shell to get uv in PATH
 
-# Create the virtual environment and install dependencies
-uv venv .venv
-source .venv/bin/activate
-
-# Fix the TRIDENT path for your environment — it ships with the repo
-# but the pyproject.toml has a hardcoded absolute path that needs updating
-sed -i "s|file:////home/yinshuol/scratch/autoMIL/autoMIL/benchmarks/lib/TRIDENT|file://$(pwd)/benchmarks/lib/TRIDENT|" benchmarks/pyproject.toml
-
-# Install the packages
-uv pip install -e .
-uv pip install -e benchmarks/
+# Install dependencies (uv manages the virtual environment automatically)
+uv sync
 
 # Verify installation
-python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
-python -c "from autobench.config import load_dataset_config; print('autobench OK')"
+uv run uv run python -c "import torch; print(f'PyTorch {torch.__version__}, CUDA: {torch.cuda.is_available()}')"
+uv run uv run python -c "from autobench.config import load_dataset_config; print('autobench OK')"
 ```
 
 ### 3. GDC Data Transfer Tool
@@ -299,10 +290,9 @@ Verify the config loads:
 
 ```bash
 cd ~/scratch/autoMIL
-source .venv/bin/activate
 set -a && source benchmarks/.env && set +a
 
-python -c "
+uv run python -c "
 from autobench.config import load_dataset_config
 ds = load_dataset_config('tcga_{code}')
 print(f'Name: {ds.name}')
@@ -421,7 +411,7 @@ torch.cuda.OutOfMemoryError: CUDA out of memory
 ```
 **Fix:** Reduce batch size. Virchow2 (2560-dim) is the largest model.
 ```bash
-python benchmarks/scripts/run_feature_extraction.py \
+uv run python benchmarks/scripts/run_feature_extraction.py \
     --dataset tcga_xxx \
     --models virchow2 \
     --batch_size 32 \
@@ -464,7 +454,7 @@ sbatch --time=2-00:00:00 benchmarks/scripts/submit_feature_extraction.sh tcga_xx
 
 If a job times out mid-extraction, you can resume by running with `--skip_seg` (if segmentation/patching already completed) and specifying only the incomplete models:
 ```bash
-python benchmarks/scripts/run_feature_extraction.py \
+uv run python benchmarks/scripts/run_feature_extraction.py \
     --dataset tcga_xxx \
     --models uni_v2 \
     --skip_seg \
@@ -480,7 +470,7 @@ python benchmarks/scripts/run_feature_extraction.py \
 | Extract features (full H100) | `sbatch benchmarks/scripts/submit_feature_extraction.sh tcga_{code}` |
 | Check jobs | `squeue -u $USER` |
 | Monitor extraction | `tail -f logs/extract_wsi_extract_*.out` |
-| Verify config | `python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').wsi_dir)"` |
+| Verify config | `uv run python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').wsi_dir)"` |
 | Count results | `ls datasets/{DATASET}/trident_output/20x_224px_0px_overlap/features_virchow2/*.h5 \| wc -l` |
 
 ## Questions?

@@ -38,11 +38,10 @@ If you haven't done these, follow the [feature extraction tutorial](tcga_feature
 
 ```bash
 cd ~/scratch/autoMIL
-source .venv/bin/activate
 set -a && source benchmarks/.env && set +a
 
 # Verify dataset config loads
-python -c "
+uv run python -c "
 from autobench.config import load_dataset_config
 ds = load_dataset_config('tcga_{code}')
 print(f'Dataset:  {ds.name}')
@@ -160,11 +159,10 @@ salloc --account=YOUR_ACCOUNT --gpus-per-node=1 --cpus-per-task=8 --mem=32G --ti
 
 # Inside the allocation
 cd ~/scratch/autoMIL
-source .venv/bin/activate
 set -a && source benchmarks/.env && set +a
 
 # Run a single experiment to test (one encoder, one model, one task)
-python benchmarks/scripts/run_benchmark.py \
+uv run python benchmarks/scripts/run_benchmark.py \
     --dataset tcga_{code} \
     --gpu 0 \
     --frameworks clam \
@@ -249,7 +247,7 @@ If you have a multi-GPU allocation:
 
 ```bash
 # Use all available GPUs with recommended model selection
-python benchmarks/scripts/run_benchmark.py \
+uv run python benchmarks/scripts/run_benchmark.py \
     --dataset tcga_{code} \
     --all_gpus \
     --frameworks clam nnmil \
@@ -259,7 +257,7 @@ python benchmarks/scripts/run_benchmark.py \
     --no_wandb
 
 # Or specify GPU indices
-python benchmarks/scripts/run_benchmark.py \
+uv run python benchmarks/scripts/run_benchmark.py \
     --dataset tcga_{code} \
     --gpus 0 1 2 3 \
     --frameworks clam nnmil \
@@ -284,7 +282,7 @@ The pipeline generates a Cartesian product: **frameworks × strategies × tasks 
 To verify the exact count for your dataset:
 
 ```bash
-python -c "
+uv run python -c "
 from autobench.config import load_dataset_config
 from autobench.pipeline.config import BenchmarkConfig, Framework, build_registries, generate_all_experiments
 
@@ -434,7 +432,7 @@ TCGA-05-4249-01Z-00-DX1.def456,1,0.35,0.65,1
 
 ```bash
 # View all completed experiments
-python -c "
+uv run python -c "
 import json, pathlib
 
 results_dir = pathlib.Path('${AUTOBENCH_TCGA_XXX_ROOT}/benchmark/results')
@@ -459,7 +457,7 @@ for s in summaries:
 #### Check for Failed Experiments
 
 ```bash
-python -c "
+uv run python -c "
 import json, pathlib
 
 failed_path = pathlib.Path('${AUTOBENCH_TCGA_XXX_ROOT}/benchmark/results/_failed.json')
@@ -476,7 +474,7 @@ else:
 #### Compare Encoders
 
 ```bash
-python -c "
+uv run python -c "
 import json, pathlib
 from collections import defaultdict
 
@@ -497,7 +495,7 @@ for enc, aucs in sorted(by_encoder.items(), key=lambda x: -sum(x[1])/len(x[1])):
 #### Compare Models
 
 ```bash
-python -c "
+uv run python -c "
 import json, pathlib
 from collections import defaultdict
 
@@ -529,7 +527,7 @@ After benchmarks complete, update your row in the [tracking sheet](https://docs.
 ### Full Argument List
 
 ```
-python benchmarks/scripts/run_benchmark.py
+uv run python benchmarks/scripts/run_benchmark.py
 
 Required:
   --dataset DATASET         Dataset config name (e.g., 'tcga_luad') or path to YAML
@@ -651,7 +649,7 @@ DATASET=tcga_{code} sbatch benchmarks/scripts/submit_benchmark.sh
 To check progress:
 
 ```bash
-python -c "
+uv run python -c "
 import json, pathlib
 
 results_dir = pathlib.Path('${AUTOBENCH_TCGA_XXX_ROOT}/benchmark/results')
@@ -677,7 +675,7 @@ The multi-GPU scheduler handles OOM automatically by retrying with a bumped VRAM
 - Reduce the model set: skip `vision_transformer` and `rrt` (highest VRAM)
 - Run memory-intensive models separately with fewer concurrent experiments:
   ```bash
-  python benchmarks/scripts/run_benchmark.py \
+  uv run python benchmarks/scripts/run_benchmark.py \
       --dataset tcga_{code} \
       --gpu 0 \
       --frameworks nnmil \
@@ -746,15 +744,15 @@ The SLURM script disables W&B by default. For interactive runs, add `--no_wandb`
 
 | Step | Command |
 |------|---------|
-| Verify setup | `python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').name)"` |
-| Single experiment (interactive) | `python benchmarks/scripts/run_benchmark.py --dataset tcga_{code} --gpu 0 --encoders hoptimus1 --models clam_mb --tasks egfr --no_wandb` |
+| Verify setup | `uv run python -c "from autobench.config import load_dataset_config; print(load_dataset_config('tcga_{code}').name)"` |
+| Single experiment (interactive) | `uv run python benchmarks/scripts/run_benchmark.py --dataset tcga_{code} --gpu 0 --encoders hoptimus1 --models clam_mb --tasks egfr --no_wandb` |
 | Standard benchmark (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" NNMIL_MODELS="simple_mil" sbatch benchmarks/scripts/submit_benchmark.sh` |
 | CLAM only (SLURM) | `DATASET=tcga_{code} ENCODERS="hoptimus1 uni_v2 virchow2" MODELS="clam_mb" FRAMEWORKS="clam" sbatch benchmarks/scripts/submit_benchmark.sh` |
 | Extended benchmark (SLURM) | `DATASET=tcga_{code} sbatch benchmarks/scripts/submit_benchmark.sh` |
 | Check job status | `squeue -u $USER` |
 | Monitor logs | `tail -f logs/bench_autobench_train_*.out` |
 | Resume after timeout | Resubmit the same command (idempotent) |
-| Count completed | `python -c "import json; print(len(json.loads(open('results/_completed.json').read())))"` |
+| Count completed | `uv run python -c "import json; print(len(json.loads(open('results/_completed.json').read())))"` |
 
 ## Questions?
 

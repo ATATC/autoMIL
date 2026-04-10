@@ -5,53 +5,69 @@ description: Set up autoMIL in an existing project. Scopes codebase, configures 
 
 # autoMIL Setup
 
-One-time setup that prepares an existing project for autonomous experimentation.
+One-time setup that prepares a project for autonomous experimentation.
+
+## Architecture
+
+autoMIL overlays onto an existing git repo. Key concepts:
+
+- **automil/ directory** can live anywhere in the repo (a subdirectory or the root).
+  The framework finds it by walking up from cwd looking for `automil/config.yaml`.
+- **File paths** in `files.editable`, `files.readonly`, and `uv run automil submit` are
+  **relative to the git repo root**, not to where automil/ lives. This allows the
+  agent to edit files anywhere in the repo.
+- **Worktrees** are full repo checkouts created from the git root. Overlaid changes
+  land at the correct paths because file paths are repo-root-relative.
+- **run.command** executes from the worktree root (= git repo root). Use
+  repo-relative paths in the command.
 
 ## Steps
 
-### 1. Initialize
+### 1. Ask the user
 
-If `automil/` directory doesn't exist yet:
+Before doing anything, ask the user:
+- Where should the automil/ overlay live?
+- What training script or command runs a single experiment?
+- Are there existing results to use as a baseline?
+
+### 2. Initialize
+
+Navigate to the target directory and run init:
 
 ```bash
-automil init
+cd <target_directory>
+uv run automil init
 ```
 
 This creates `automil/` with config.yaml, program.md, learnings.md, and
-orchestrator directories.
+orchestrator directories. Works from any subdirectory of a git repo.
 
-### 2. Scope the codebase
+### 3. Scope the codebase
 
 Read the project structure thoroughly. Identify:
 
-- **Training script**: the main entry point that trains the model and evaluates it.
-  Could be `train.py`, `main.py`, `src/train.py`, or anything else.
+- **Training entry point**: the script or command that trains one model and
+  evaluates it. This must be a single-experiment command, NOT a batch/grid runner.
 - **Model architecture**: files defining the model (layers, attention, pooling)
+- **Training loop**: files controlling loss, optimizer, training logic
 - **Data loading**: dataset classes, data loaders, preprocessing
-- **Loss/optimizer**: loss functions, optimizer configs, learning rate schedules
 - **Evaluation**: metrics computation, cross-validation setup
 - **Configuration**: hyperparameters, constants, config files
 
-### 3. Configure automil/config.yaml
+### 4. Ensure single-experiment execution
 
-Update every field:
+autoMIL runs **one experiment at a time** — the agent makes a code change,
+submits it, and the orchestrator trains once to measure the effect.
 
-- `run.script`: path to the training script relative to project root
-- `run.command`: (optional) full command override if the script needs special invocation
-- `data.*`: paths to features, splits, metadata
-- `encoders.*`: available encoders and dimensions
-- `baseline.*`: starting model name, framework, and performance metrics
-- `files.editable`: list every file the agent is allowed to modify
-- `files.readonly`: list files that must not be changed (evaluation code, data splits, etc.)
-- `metrics.*`: what metrics to track and how composite is computed
-- `training.*`: current hyperparameter values (for agent reference)
+The training command must:
+1. Run a single training run (not a grid/sweep)
+2. Write `result.json` to the working directory before exiting
 
-### 4. Verify the result.json contract
+If the project only has a batch/grid runner, create a single-experiment
+entry point that calls the existing pipeline for one configuration and
+writes result.json.
 
-The training script must write `result.json` to its working directory before
-exiting. Check if it already does this. If not, add it.
-
-Required schema:
+Required result.json schema:
 ```json
 {
   "status": "completed",
@@ -67,32 +83,40 @@ Required schema:
 }
 ```
 
-If the training script doesn't write this, modify it to add result.json
-output at the end of the training loop.
+### 5. Configure automil/config.yaml
 
-### 5. Validate
+Update every field. File paths in `files.editable` and `files.readonly` must
+be **relative to the git repo root**:
+
+- `run.command`: full command to run one experiment (repo-root-relative paths)
+- `run.script`: set to `null` when using `run.command`
+- `data.*`: paths to features, splits, metadata
+- `encoders.*`: available encoders and dimensions
+- `baseline.*`: best existing performance metrics
+- `files.editable`: repo-root-relative paths to files the agent may modify
+- `files.readonly`: repo-root-relative paths to files that must not change
+- `metrics.*`: what metrics to track and how composite is computed
+- `training.*`: current hyperparameter values (for agent reference)
+
+### 6. Validate
 
 ```bash
-automil check
+uv run automil check
 ```
 
 Fix any issues reported. All checks should pass before starting experiments.
 
-### 6. Establish baseline
+### 7. Establish baseline
 
-Run the unmodified training script as the first experiment:
-
-```bash
-automil submit --node node_0001 --desc "baseline" --files <training_script>
-```
-
-Wait for the orchestrator to complete it, then verify results:
+If results already exist, populate the baseline from those metrics (no re-run
+needed). Otherwise, submit the unmodified code as the first experiment:
 
 ```bash
-automil reconcile
-automil status
+uv run automil submit --node node_0001 --desc "baseline" --files <editable_files>
+uv run automil reconcile
+uv run automil status
 ```
 
-### 7. Done
+### 8. Done
 
 Setup is complete. Use `/automil` to start the experiment loop.

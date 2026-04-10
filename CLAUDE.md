@@ -42,16 +42,16 @@ uv run pytest tests/test_graph.py -v
 # Run a specific test
 uv run pytest tests/test_integration.py::TestEndToEnd::test_init_submit_flow -v
 
-# CLI usage (inside a project repo)
-automil init                    # overlay automil/ onto current repo
-automil submit --node <id> --desc "..." --files train.py
-automil rank
-automil propose --parent <id> --desc "..."
-automil reconcile
-automil check                   # validate project setup
-automil status
-automil orchestrator start
-automil viz start
+# CLI usage (prefix with `uv run` if not installed globally)
+uv run automil init                    # overlay automil/ onto current repo
+uv run automil submit --node <id> --desc "..." --files train.py
+uv run automil rank
+uv run automil propose --parent <id> --desc "..."
+uv run automil reconcile
+uv run automil check                   # validate project setup
+uv run automil status
+uv run automil orchestrator start
+uv run automil viz start
 ```
 
 ## Key Files
@@ -122,6 +122,23 @@ autoMIL/
 Dataset-specific configuration (paths, tasks, encoders) lives in
 `benchmarks/datasets/*.yaml`. All paths use `${ENV_VAR}` syntax —
 set environment variables (e.g. `AUTOBENCH_OVARIAN_ROOT`) for your environment.
+
+### Environment Variables (.env)
+
+Each dataset YAML references a root path via `${AUTOBENCH_<DATASET>_ROOT}`.
+These must be set before running experiments. Create `benchmarks/.env` from
+the example:
+
+```bash
+cp benchmarks/.env.example benchmarks/.env
+# Edit benchmarks/.env with your actual paths
+```
+
+**Important:** `.env` is gitignored and won't exist inside git worktrees.
+The orchestrator automatically loads `benchmarks/.env` and propagates
+the variables to experiment processes. If experiments crash with
+`ValueError: Environment variable ${AUTOBENCH_...} is not set`, check
+that `benchmarks/.env` exists and has the correct paths.
 
 Key modules: `autobench.config` (dataset YAML loading), `autobench.pipeline.*`
 (experiment execution: training, evaluation, GPU orchestration).

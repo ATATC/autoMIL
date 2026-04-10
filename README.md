@@ -98,6 +98,10 @@ cd autoMIL
 uv tool install -e .
 ```
 
+> **Note:** If you haven't installed `automil` globally via `uv tool install`,
+> prefix all commands with `uv run` (e.g., `uv run automil init`).
+> This applies when developing within the autoMIL repo itself.
+
 ### 2. Initialize in your project
 
 ```bash

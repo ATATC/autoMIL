@@ -13,7 +13,7 @@ autoMIL overlays onto an existing git repo. Key concepts:
 
 - **automil/ directory** can live anywhere in the repo (a subdirectory or the root).
   The framework finds it by walking up from cwd looking for `automil/config.yaml`.
-- **File paths** in `files.editable`, `files.readonly`, and `automil submit` are
+- **File paths** in `files.editable`, `files.readonly`, and `uv run automil submit` are
   **relative to the git repo root**, not to where automil/ lives. This allows the
   agent to edit files anywhere in the repo.
 - **Worktrees** are full repo checkouts created from the git root. Overlaid changes
@@ -36,7 +36,7 @@ Navigate to the target directory and run init:
 
 ```bash
 cd <target_directory>
-automil init
+uv run automil init
 ```
 
 This creates `automil/` with config.yaml, program.md, learnings.md, and
@@ -101,7 +101,7 @@ be **relative to the git repo root**:
 ### 6. Validate
 
 ```bash
-automil check
+uv run automil check
 ```
 
 Fix any issues reported. All checks should pass before starting experiments.
@@ -112,9 +112,9 @@ If results already exist, populate the baseline from those metrics (no re-run
 needed). Otherwise, submit the unmodified code as the first experiment:
 
 ```bash
-automil submit --node node_0001 --desc "baseline" --files <editable_files>
-automil reconcile
-automil status
+uv run automil submit --node node_0001 --desc "baseline" --files <editable_files>
+uv run automil reconcile
+uv run automil status
 ```
 
 ### 8. Done
