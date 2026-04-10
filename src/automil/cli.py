@@ -324,6 +324,34 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
     queue_file.write_text(json.dumps(spec, indent=2))
 
+    # Register the node in the graph so that next_id is bumped and proposals
+    # don't collide with submitted experiment IDs.
+    graph_path = adir / "graph.json"
+    if graph_path.exists():
+        from automil.graph import ExperimentGraph
+        graph = ExperimentGraph(path=str(graph_path))
+        if not graph.get_node(node):
+            graph.nodes[node] = {
+                "id": node,
+                "parent_id": parent,
+                "type": "proposed",
+                "status": "running",
+                "description": desc,
+                "techniques": list(techniques),
+                "config_hash": config_hash,
+                "potential": 0.0,
+                "created_at": datetime.now().isoformat(),
+            }
+            # Bump next_id so proposals don't collide
+            if node.startswith("node_"):
+                try:
+                    num = int(node.split("_")[1])
+                    if num >= graph.meta["next_id"]:
+                        graph.meta["next_id"] = num + 1
+                except (ValueError, IndexError):
+                    pass
+            graph.save()
+
     n_snap = len(overlay_manifest)
     n_del = len(deletions)
     parts_msg = []
