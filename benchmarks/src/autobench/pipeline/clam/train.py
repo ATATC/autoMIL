@@ -70,9 +70,9 @@ def _make_clam_args(
         n_classes=exp_cfg.task.n_classes,
         embed_dim=exp_cfg.embed_dim,
         drop_out=exp_cfg.model.dropout,
-        subtyping=False,
+        subtyping=(exp_cfg.task.n_classes > 2),
         B=exp_cfg.model.B,
-        inst_loss="ce",
+        inst_loss=None,
         no_inst_cluster=False,
         bag_weight=exp_cfg.model.bag_weight,
         bag_loss="ce",
@@ -128,7 +128,7 @@ def train_fold(
         with open(metrics_path) as f:
             return json.load(f)
 
-    seed_everything(exp_cfg.train.seed + fold)
+    seed_everything(exp_cfg.train.seed)
 
     # --- wandb setup (captures CLAM's tensorboard writes automatically) ---
     wb_run = None
