@@ -16,7 +16,7 @@ import os
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import StratifiedGroupKFold
+from sklearn.model_selection import StratifiedKFold, train_test_split
 
 from autobench.pipeline.config import StrategyConfig
 
@@ -65,40 +65,65 @@ def _splits_standard_cv(
     n_splits: int,
     seed: int,
 ) -> list[str]:
-    """Patient-stratified k-fold: test from outer CV, val carved from train+val."""
-    slide_ids = df["slide_id"].values
-    case_ids = df["case_id"].values
-    labels = df["label"].values
+    """Patient-stratified k-fold: dedup to cases, split cases, expand to slides.
 
-    outer = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    Slides from the same ``case_id`` share a label (mutations are case-level)
+    so we can dedup safely and run standard StratifiedKFold on cases.
+    Avoids StratifiedGroupKFold's minimum-stratum-size limitation.
+    """
+    # One row per case with its label (slides of the same case share a label)
+    case_table = df.groupby("case_id", sort=True)["label"].first().reset_index()
+    case_ids = case_table["case_id"].values
+    case_labels = case_table["label"].values
+
+    # Map case_id -> list of slide_ids for expansion
+    case_to_slides = df.groupby("case_id")["slide_id"].apply(list).to_dict()
+
+    outer = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     split_paths: list[str] = []
 
-    for fold_idx, (train_val_idx, test_idx) in enumerate(outer.split(slide_ids, labels, groups=case_ids)):
-        test_ids = slide_ids[test_idx]
+    for fold_idx, (train_val_case_idx, test_case_idx) in enumerate(
+        outer.split(case_ids, case_labels)
+    ):
+        train_val_cases = case_ids[train_val_case_idx]
+        train_val_labels = case_labels[train_val_case_idx]
+        test_cases = case_ids[test_case_idx]
 
-        tv_slides = slide_ids[train_val_idx]
-        tv_cases = case_ids[train_val_idx]
-        tv_labels = labels[train_val_idx]
-
-        # Inner val carve: ~12.5% val (1/8 split) to match nnMIL upstream val_frac=0.125
-        inner = StratifiedGroupKFold(n_splits=8, shuffle=True, random_state=seed + fold_idx)
-        train_sub_idx, val_sub_idx = next(inner.split(tv_slides, tv_labels, groups=tv_cases))
-
-        train_ids = tv_slides[train_sub_idx]
-        val_ids = tv_slides[val_sub_idx]
+        # Inner val carve: ~12.5% val on cases, matches nnMIL upstream val_frac=0.125
+        train_cases, val_cases = train_test_split(
+            train_val_cases,
+            test_size=0.125,
+            stratify=train_val_labels,
+            random_state=seed + fold_idx,
+        )
 
         _assert_no_patient_leakage(
-            train_cases=tv_cases[train_sub_idx],
-            val_cases=tv_cases[val_sub_idx],
-            test_cases=case_ids[test_idx],
+            train_cases=np.asarray(train_cases),
+            val_cases=np.asarray(val_cases),
+            test_cases=np.asarray(test_cases),
             fold_idx=fold_idx,
         )
+
+        train_ids = _expand_cases_to_slides(train_cases, case_to_slides)
+        val_ids = _expand_cases_to_slides(val_cases, case_to_slides)
+        test_ids = _expand_cases_to_slides(test_cases, case_to_slides)
 
         path = _write_split_csv(splits_dir, fold_idx, train_ids, val_ids, test_ids)
         split_paths.append(path)
 
     print(f"  Splits: {splits_dir}  ({n_splits} folds, patient-stratified CV)")
     return split_paths
+
+
+def _expand_cases_to_slides(
+    cases: np.ndarray | list,
+    case_to_slides: dict[str, list[str]],
+) -> np.ndarray:
+    """Expand a list of case_ids to the flat list of their slide_ids."""
+    out: list[str] = []
+    for c in cases:
+        out.extend(case_to_slides.get(c, []))
+    return np.asarray(out, dtype=object)
 
 
 def _assert_no_patient_leakage(
