@@ -66,7 +66,7 @@ class ModelConfig:
 @dataclass
 class TrainConfig:
     max_epochs: int = 200
-    lr: float = 1e-4
+    lr: float = 2e-4
     weight_decay: float = 1e-5
     optimizer: str = "adam"
     early_stopping: bool = True
@@ -83,7 +83,7 @@ class ExperimentConfig:
     embed_dim: int
     model: ModelConfig
     train: TrainConfig
-    n_folds: int = 5
+    n_folds: int = 10
     framework: Framework = Framework.CLAM
     strategy: str = "standard"
 
@@ -126,7 +126,7 @@ class BenchmarkConfig:
     model_types: list[str] = field(default_factory=list)
     tasks: list[str] = field(default_factory=list)
     train: TrainConfig = field(default_factory=TrainConfig)
-    n_folds: int = 5
+    n_folds: int = 10
     gpu: int = 0
     wandb_project: str | None = None
     experiments_per_gpu: int | None = None
@@ -216,12 +216,7 @@ NNMIL_RUNTIME_DEFAULTS: dict[str, int] = {
     "num_workers": 0,
 }
 
-NNMIL_MODEL_RUNTIME_OVERRIDES: dict[str, dict[str, int]] = {
-    "vision_transformer": {"batch_size": 4, "max_seq_length": 4096},
-    "rrt": {"batch_size": 4, "max_seq_length": 4096},
-    "trans_mil": {"batch_size": 4, "max_seq_length": 4096},
-    "ilra_mil": {"batch_size": 4, "max_seq_length": 4096},
-}
+NNMIL_MODEL_RUNTIME_OVERRIDES: dict[str, dict[str, int]] = {}
 
 
 def get_nnmil_runtime_overrides(model_type: str) -> dict[str, int]:
