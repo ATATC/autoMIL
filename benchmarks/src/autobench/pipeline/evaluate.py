@@ -5,11 +5,14 @@ from __future__ import annotations
 import numpy as np
 from sklearn.metrics import (
     accuracy_score,
+    auc as sk_auc,
     balanced_accuracy_score,
     confusion_matrix,
     f1_score,
     roc_auc_score,
+    roc_curve,
 )
+from sklearn.preprocessing import label_binarize
 
 
 def compute_extended_metrics(
@@ -28,10 +31,19 @@ def compute_extended_metrics(
         except ValueError:
             metrics["auc_roc"] = float("nan")
     else:
+        # Match CLAM upstream's per-class roc_curve + nanmean
+        # (lib/CLAM/utils/core_utils.py:514-527)
         try:
-            metrics["auc_roc"] = float(
-                roc_auc_score(y_true, y_probs, multi_class="ovr")
-            )
+            binary_labels = label_binarize(y_true, classes=list(range(n_classes)))
+            aucs: list[float] = []
+            present = set(np.unique(y_true).tolist())
+            for class_idx in range(n_classes):
+                if class_idx in present:
+                    fpr, tpr, _ = roc_curve(binary_labels[:, class_idx], y_probs[:, class_idx])
+                    aucs.append(float(sk_auc(fpr, tpr)))
+                else:
+                    aucs.append(float("nan"))
+            metrics["auc_roc"] = float(np.nanmean(aucs))
         except ValueError:
             metrics["auc_roc"] = float("nan")
 
@@ -57,18 +69,23 @@ def compute_extended_metrics(
 def compute_confidence_intervals(
     fold_metrics: list[dict[str, float]],
     confidence: float = 0.95,
+    n_bootstrap: int = 1000,
+    seed: int = 42,
 ) -> dict[str, dict[str, float]]:
-    """Compute mean and 95 % CI across folds via the t-distribution."""
-    from scipy import stats
+    """Compute mean and CI across folds via percentile bootstrap.
 
+    Matches upstream nnMIL's CI procedure (lib/nnMIL/.../utils.py:180):
+    resample fold metrics with replacement, take 2.5/97.5 percentiles.
+    """
     metric_names = list(fold_metrics[0].keys())
-    n = len(fold_metrics)
     alpha = 1 - confidence
-    t_crit = stats.t.ppf(1 - alpha / 2, df=n - 1) if n > 1 else 0.0
+    lo_pct = 100 * (alpha / 2)
+    hi_pct = 100 * (1 - alpha / 2)
+    rng = np.random.default_rng(seed)
 
     results: dict[str, dict[str, float]] = {}
     for name in metric_names:
-        values = np.array([fm[name] for fm in fold_metrics])
+        values = np.array([fm[name] for fm in fold_metrics], dtype=float)
         valid = values[~np.isnan(values)]
 
         if len(valid) < 2:
@@ -81,14 +98,16 @@ def compute_confidence_intervals(
             }
             continue
 
-        mean = float(np.mean(valid))
-        std = float(np.std(valid, ddof=1))
-        se = std / np.sqrt(len(valid))
+        boot_means = np.empty(n_bootstrap, dtype=float)
+        for i in range(n_bootstrap):
+            sample = rng.choice(valid, size=len(valid), replace=True)
+            boot_means[i] = sample.mean()
+
         results[name] = {
-            "mean": mean,
-            "std": std,
-            "ci_low": float(mean - t_crit * se),
-            "ci_high": float(mean + t_crit * se),
+            "mean": float(np.mean(valid)),
+            "std": float(np.std(valid, ddof=1)),
+            "ci_low": float(np.percentile(boot_means, lo_pct)),
+            "ci_high": float(np.percentile(boot_means, hi_pct)),
         }
 
     return results
