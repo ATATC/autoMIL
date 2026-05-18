@@ -366,33 +366,43 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     queue_file = adir / "orchestrator" / "queue" / f"{node}.json"
     queue_file.write_text(json.dumps(spec, indent=2))
 
-    # Register the node in the graph so that next_id is bumped and proposals
-    # don't collide with submitted experiment IDs.
+    # Register the node in the graph so next_id is bumped and proposals
+    # don't collide with submitted experiment IDs. Route through
+    # add_proposed + mark_running rather than direct dict-mutation so the
+    # state-machine counter (meta.total_proposed) stays consistent;
+    # otherwise every submit increments running without a matching
+    # proposed-counter bump, and the counter drifts negative as nodes
+    # complete and mark_executed decrements.
+    #
+    # locked_update serializes this read-modify-write against the daemon
+    # (which also writes graph.json from _handle_completion) so we don't
+    # lose either side's update.
     graph_path = adir / "graph.json"
     if graph_path.exists():
-        from automil.graph import ExperimentGraph
-        graph = ExperimentGraph(path=str(graph_path))
-        if not graph.get_node(node):
-            graph.nodes[node] = {
-                "id": node,
-                "parent_id": parent,
-                "type": "proposed",
-                "status": "running",
-                "description": desc,
-                "techniques": list(techniques),
-                "config_hash": config_hash,
-                "potential": 0.0,
-                "created_at": datetime.now().isoformat(),
-            }
-            # Bump next_id so proposals don't collide
-            if node.startswith("node_"):
-                try:
-                    num = int(node.split("_")[1])
-                    if num >= graph.meta["next_id"]:
-                        graph.meta["next_id"] = num + 1
-                except (ValueError, IndexError):
-                    pass
-            graph.save()
+        from automil.graph import locked_update
+        with locked_update(graph_path) as graph:
+            if not graph.get_node(node):
+                # Force the next-allocated id to match `node`. add_proposed
+                # calls next_id() internally; pre-bump meta.next_id to the
+                # numeric component of node so add_proposed returns this id.
+                if node.startswith("node_"):
+                    try:
+                        num = int(node.split("_")[1])
+                        if num > graph.meta["next_id"]:
+                            graph.meta["next_id"] = num
+                    except (ValueError, IndexError):
+                        pass
+                allocated = graph.add_proposed(
+                    parent_id=parent,
+                    description=desc,
+                    techniques=list(techniques),
+                )
+                # Carry over the config_hash that was computed for this
+                # submit. add_proposed doesn't take it as an argument.
+                graph.nodes[allocated]["config_hash"] = config_hash
+                # Transition to running through the official state-machine
+                # path so the counter math stays consistent.
+                graph.mark_running(allocated)
 
     n_snap = len(overlay_manifest)
     n_del = len(deletions)

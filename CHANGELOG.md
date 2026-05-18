@@ -2,7 +2,7 @@
 
 autoMIL: F2-readiness framework refactor.
 
-## v1.0 milestone (shipped 2026-05-08, `git tag v1.0`)
+## 8.0.0 — v1.0 milestone (shipped 2026-05-08, `git tag v1.0`)
 
 The F2-readiness framework refactor. Nine phases (Phase 0 cleanup through
 Phase 8 acceptance), 92 plans executed, 69 v1 requirements delivered (100%
@@ -102,6 +102,13 @@ cleanup). `pyproject.toml` adds `requires_ccrcc_data` marker. CI default
 filters `not requires_ccrcc_data and not requires_slurm and not requires_ray`.
 `jsonschema` is no new top-level dep; transitive since Phase 5.
 
+## 7.0.0 — Phase 7. Hardware autodetect + automil-setup skill (2026-05-07)
+
+**BREAKING.** `Backend.healthcheck` is abstract in the Backend ABC. Custom
+Backend subclasses must implement it; the locked `NotImplementedError`
+message for distributed backends is
+`"healthcheck deferred to Phase 7+ for distributed backends (use salloc/ray status directly)"`.
+
 ### Phase 7. Hardware autodetect + automil-setup skill (2026-05-07)
 
 **Theme:** detect hardware once, surface it to the user, never decide
@@ -146,6 +153,14 @@ the prior hardcoded constants. Per the Pitfall 8 anti-acceptance,
 `default_vram_estimate_gb` is computed from `numpy.quantile(.95)` of empirical
 `vram_gb` observations in `automil/results.tsv` when ≥10 rows are present,
 and from `max(8.0, min(gpu_vram_gb) / 8.0)` otherwise.
+
+## 6.0.0 — Phase 6. SLURM backend (submitit) + Ray backend (raw `@ray.remote`) (2026-05-06)
+
+**BREAKING.** Per-backend `running/` namespacing.
+`orchestrator/running/<id>.json` (flat) → `orchestrator/running/<backend>/<id>.json`.
+The daemon refuses to start if it detects the flat layout. Recovery:
+stop the daemon (`automil orchestrator stop`), verify
+`ls automil/orchestrator/running/*.json | wc -l` returns 0, then restart.
 
 ### Phase 6. SLURM backend (submitit) + Ray backend (raw `@ray.remote`) (2026-05-06)
 

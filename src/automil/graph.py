@@ -1,9 +1,13 @@
 """Experiment graph: directed tree tracking for multi-branch exploration.
 
-Provides atomic read/write to graph.json. The agent is the sole writer.
+Provides atomic read/write to graph.json. Concurrent writers (daemon +
+CLI) coordinate through an advisory ``flock`` on a sidecar ``.lock``
+file; see ``locked_update``.
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import io
 import json
@@ -18,19 +22,51 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+@contextlib.contextmanager
+def locked_update(graph_path: str | Path):
+    """Read-modify-write context manager for graph.json under a fcntl lock.
+
+    Use this whenever a process needs to mutate ``graph.json`` to prevent
+    lost updates between the daemon and CLI:
+
+        with locked_update(path) as graph:
+            graph.add_proposed(...)
+            # graph.save() runs on context exit
+
+    Acquires an exclusive POSIX advisory lock on ``<graph_path>.lock``
+    BEFORE constructing the in-memory ExperimentGraph, so the snapshot
+    read by the constructor cannot be invalidated by another writer
+    until the block exits.
+
+    Atomic-rename in ``save()`` alone prevented torn writes but not
+    lost updates; this context manager is the fix for the race the
+    audit flagged.
+    """
+    path = Path(graph_path)
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_f = open(lock_path, "w")
+    try:
+        fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
+        graph = ExperimentGraph(path=path)
+        yield graph
+        graph.save()
+    finally:
+        try:
+            fcntl.flock(lock_f.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_f.close()
+
+
 class ExperimentGraph:
-    DEFAULT_TECHNIQUE_MAP: dict[str, str] = {
-        "no_inst": "no_inst_eval", "focal": "focal_g1", "gamma1": "focal_g1",
-        "gc05": "grad_clip", "gc0.5": "grad_clip", "rdrop": "rdrop",
-        "step_lr": "step_lr", "coord_pe": "coord_pe", "noise001": "noise_aug",
-        "d0.1": "dropout_01", "big": "big_model", "bw0.5": "bag_weight_05",
-        "trans_mil": "trans_mil", "dtfd": "dtfd_mil", "ilra": "ilra_mil",
-        "vit": "vision_transformer", "ab_mil": "ab_mil", "clam_sb": "clam_sb",
-        "uni_v2": "uni_v2", "hibou_l": "hibou_l", "psemix": "psemix",
-        "aem": "aem", "variance_pool": "variance_pool", "topk": "topk_attn",
-        "maxsoft": "maxsoft", "supcon": "supcon", "attn_temp": "attn_temp",
-        "poly1": "poly_loss", "bilevel_lr": "bilevel_lr",
-    }
+    # Generic by default. Consumers that want technique-name normalisation
+    # (MIL pathology, sklearn-iris, ...) pass ``technique_map=`` to the
+    # constructor or set it via config. The framework ships no MIL- or
+    # pathology-specific keys here; the previous bundled map leaked the
+    # first consumer's vocabulary into the generic core. The autobench
+    # consumer's normalisation map is now at
+    # ``benchmarks/src/autobench/pipeline/technique_map.py``.
+    DEFAULT_TECHNIQUE_MAP: dict[str, str] = {}
 
     def __init__(self, path: str | Path, technique_map: dict[str, list[str]] | None = None, data: dict | None = None):
         self.path = Path(path)
@@ -40,23 +76,32 @@ class ExperimentGraph:
         elif self.path.exists():
             self._data = json.loads(self.path.read_text())
         else:
-            self._data = {
-                "schema_version": 1,
-                "meta": {
-                    "best_composite": 0.0,
-                    "best_node_id": None,
-                    "total_executed": 0,
-                    "total_proposed": 0,
-                    "next_id": 1,
-                    "baseline_composite": 0.0,
-                    "scoring": {
-                        "exploration_weight": 0.005,
-                        "novelty_weight": 0.003,
-                    },
+            self._data = {}
+        # Normalize: fill in missing top-level keys / meta sub-keys with
+        # defaults so legacy / partial graph.json files don't crash later
+        # property access. Existing values are preserved (setdefault).
+        defaults = {
+            "schema_version": 1,
+            "meta": {
+                "best_composite": 0.0,
+                "best_node_id": None,
+                "total_executed": 0,
+                "total_proposed": 0,
+                "next_id": 1,
+                "baseline_composite": 0.0,
+                "scoring": {
+                    "exploration_weight": 0.005,
+                    "novelty_weight": 0.003,
                 },
-                "nodes": {},
-                "technique_stats": {},
-            }
+            },
+            "nodes": {},
+            "technique_stats": {},
+        }
+        for k, v in defaults.items():
+            self._data.setdefault(k, v if not isinstance(v, dict) else dict(v))
+        # Normalize meta sub-keys too (in case of an older schema).
+        for mk, mv in defaults["meta"].items():
+            self._data["meta"].setdefault(mk, mv if not isinstance(mv, dict) else dict(mv))
 
     @staticmethod
     def load(path: str | Path) -> ExperimentGraph:
@@ -744,8 +789,25 @@ class ExperimentGraph:
     # --- Migration ---
     @staticmethod
     def import_from_tsv(tsv_path: str, strategies_path: str | None = None,
-                        graph_path: str | Path = "graph.json") -> ExperimentGraph:
-        g = ExperimentGraph(path=graph_path)
+                        graph_path: str | Path = "graph.json",
+                        technique_map: dict[str, str] | None = None) -> ExperimentGraph:
+        """Bootstrap a graph from a TSV produced by ``_append_results_tsv``.
+
+        Column order is read from the header row, not hardcoded — any
+        columns beyond ``node_id``, ``composite``, ``vram_gb``,
+        ``elapsed_min``, ``status``, ``description`` are mapped into the
+        node's ``metrics`` dict by their header name. This means
+        autobench-style TSVs (val_auc, val_bacc, test_auc, test_bacc)
+        and any other consumer's TSV both round-trip without code
+        changes.
+
+        ``technique_map`` is the optional consumer-specific shorthand map
+        for tagging techniques from the description; default empty (no
+        tagging). Pass ``AUTOBENCH_TECHNIQUE_MAP`` from
+        ``benchmarks/src/autobench/pipeline/technique_map.py`` to recover
+        the previous MIL-shorthand behaviour.
+        """
+        g = ExperimentGraph(path=graph_path, technique_map=technique_map or {})
 
         with open(tsv_path) as f:
             lines = f.readlines()
@@ -753,23 +815,86 @@ class ExperimentGraph:
         if not lines or len(lines) < 2:
             return g
 
+        header_cols = lines[0].strip().split("\t")
+        # First column accepted as identifier under either name: post-v1.0
+        # is "node_id"; pre-v1.0 was "commit". Both round-trip.
+        if header_cols and header_cols[0] in ("node_id", "commit"):
+            i_node = 0
+        else:
+            try:
+                i_node = header_cols.index("node_id")
+            except ValueError:
+                raise ValueError(
+                    f"TSV {tsv_path} has no 'node_id' or 'commit' column "
+                    "as the identifier."
+                )
+        try:
+            i_composite = header_cols.index("composite")
+            i_vram = header_cols.index("vram_gb")
+            i_elapsed = header_cols.index("elapsed_min")
+            i_status = header_cols.index("status")
+            i_desc = header_cols.index("description")
+        except ValueError as exc:
+            raise ValueError(
+                f"TSV {tsv_path} is missing one of the required columns "
+                f"(composite, vram_gb, elapsed_min, status, description): "
+                f"{exc}"
+            )
+        _RESERVED = {header_cols[i_node], "composite", "vram_gb",
+                     "elapsed_min", "status", "description", "delta"}
+        # All other columns are treated as metrics.
+        metric_idx = [
+            (col, idx) for idx, col in enumerate(header_cols)
+            if col not in _RESERVED
+        ]
+
         rows = lines[1:]
         current_best_id = None
 
         for row in rows:
             parts = row.strip().split("\t")
-            if len(parts) < 11:
+            if len(parts) < len(header_cols):
                 continue
 
-            commit, val_auc, val_bacc = parts[0], float(parts[1]), float(parts[2])
-            test_auc, test_bacc = float(parts[3]), float(parts[4])
-            composite, delta = float(parts[5]), float(parts[6].replace("+", ""))
-            vram_gb, elapsed_min = float(parts[7]), float(parts[8])
-            status, description = parts[9], parts[10]
+            commit = parts[i_node]
+            try:
+                composite = float(parts[i_composite])
+            except ValueError:
+                continue
+            try:
+                vram_gb = float(parts[i_vram])
+                elapsed_min = float(parts[i_elapsed])
+            except ValueError:
+                vram_gb, elapsed_min = 0.0, 0.0
+            status = parts[i_status]
+            description = parts[i_desc]
 
-            techniques = []
+            metrics: dict[str, float] = {
+                "composite": composite,
+                "vram_gb": vram_gb,
+                "elapsed_min": elapsed_min,
+                "gpu": -1,
+            }
+            # Carry the optional pre-v1.0 `delta` column into metrics for
+            # round-trip fidelity, parsing "+0.013"-style strings.
+            if "delta" in header_cols:
+                try:
+                    metrics["delta"] = float(parts[header_cols.index("delta")].replace("+", ""))
+                except (ValueError, IndexError):
+                    pass
+            for col_name, idx in metric_idx:
+                cell = parts[idx]
+                if cell == "":
+                    continue
+                try:
+                    metrics[col_name] = float(cell)
+                except ValueError:
+                    # non-numeric metric column — store raw
+                    metrics[col_name] = cell  # type: ignore[assignment]
+
+            techniques: list[str] = []
             desc_lower = description.lower()
-            for pattern, tag in ExperimentGraph.DEFAULT_TECHNIQUE_MAP.items():
+            for pattern, tag in (g._technique_map or {}).items():
                 if pattern in desc_lower and tag not in techniques:
                     techniques.append(tag)
 
@@ -777,13 +902,7 @@ class ExperimentGraph:
                 parent_id=current_best_id,
                 description=description,
                 techniques=techniques,
-                metrics={
-                    "composite": composite,
-                    "delta": delta,
-                    "test_auc": test_auc, "test_bacc": test_bacc,
-                    "val_auc": val_auc, "val_bacc": val_bacc,
-                    "vram_gb": vram_gb, "elapsed_min": elapsed_min, "gpu": -1,
-                },
+                metrics=metrics,
                 status=status,
                 commit=commit,
                 bootstrapped=True,

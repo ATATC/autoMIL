@@ -38,24 +38,60 @@ class Runner:
                       deletions: list[str] | None = None) -> None:
         """Copy modified files from overlay_dir on top of worktree.
 
-        Also removes files listed in `deletions` from the worktree to support
-        experiments that delete or rename files.
+        Also removes files listed in ``deletions`` from the worktree to
+        support experiments that delete or rename files.
+
+        Defensive boundary: even though ``automil submit`` validates paths
+        upstream, the runner is the last line of defence before files
+        land in the worktree. Reject ``..`` traversal, absolute paths,
+        and symlinks pointing outside the worktree so a malicious or
+        corrupt overlay (or deletions list) cannot land arbitrary files
+        on disk.
         """
+        wt_resolved = worktree_path.resolve()
+        ov_resolved = overlay_dir.resolve()
         metadata_files = {Path("spec.json"), Path("run.log"), Path("result.json")}
+
         for src_file in overlay_dir.rglob("*"):
             if not src_file.is_file():
                 continue
+            # Reject symlinks in the overlay (they could resolve outside
+            # overlay_dir and exfiltrate / overwrite host paths).
+            if src_file.is_symlink():
+                raise ValueError(
+                    f"Overlay rejected: symlink in overlay at {src_file} "
+                    "(symlinks are not permitted in overlays)"
+                )
             rel = src_file.relative_to(overlay_dir)
             if rel in metadata_files:
                 continue
-            dst = worktree_path / rel
+            dst = (worktree_path / rel).resolve()
+            try:
+                dst.relative_to(wt_resolved)
+            except ValueError:
+                raise ValueError(
+                    f"Overlay rejected: target {dst} escapes worktree "
+                    f"root {wt_resolved}"
+                )
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src_file, dst)
 
-        # Apply deletions
         if deletions:
             for rel_path in deletions:
-                target = worktree_path / rel_path
+                rel = Path(rel_path)
+                if rel.is_absolute() or any(p == ".." for p in rel.parts):
+                    raise ValueError(
+                        f"Overlay rejected: deletion path {rel_path!r} "
+                        "must be relative and may not contain '..'"
+                    )
+                target = (worktree_path / rel).resolve()
+                try:
+                    target.relative_to(wt_resolved)
+                except ValueError:
+                    raise ValueError(
+                        f"Overlay rejected: deletion target {target} "
+                        f"escapes worktree root {wt_resolved}"
+                    )
                 if target.exists():
                     target.unlink()
 

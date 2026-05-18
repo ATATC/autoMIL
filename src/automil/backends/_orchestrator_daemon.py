@@ -456,6 +456,10 @@ class ExperimentOrchestrator:
         self.draining = False
         self._shutdown = False
         self._timed_out: dict[str, bool] = {}
+        # node_id -> wall-clock deadline at which an outstanding SIGTERM
+        # should escalate to SIGKILL. Set by _kill_experiment; consumed by
+        # _check_running. Grace period is 5s, matching _handle_timeout.
+        self._pending_sigkill_at: dict[str, float] = {}
         # Phase 4 (CAP-02): optional Backend instance for cancel dispatch.
         # Injected by tests (or future Backend integration) to receive
         # cancel(handle, signal=SIGTERM) calls from _tick_cells.  When None,
@@ -770,7 +774,25 @@ class ExperimentOrchestrator:
         if src_file and Path(src_file).exists():
             Path(src_file).unlink()
 
-        base_commit = spec.get("base_commit", "HEAD")
+        # Reject specs without an explicit base_commit. submit always pins
+        # the parent SHA at queue-time; any path that bypasses this would
+        # silently resolve "HEAD" at run time (parent drift between submit
+        # and launch). A NULL/missing base_commit is a programmer error,
+        # not something to paper over with a runtime default.
+        base_commit = spec.get("base_commit")
+        if not base_commit:
+            logger.error(
+                "Spec for %s has no base_commit; refusing to launch. "
+                "All queued specs must pin the parent SHA at submit time.",
+                node_id,
+            )
+            self._mark_crashed(
+                node_id, spec,
+                "spec missing required 'base_commit' field — submit must "
+                "pin the parent SHA at queue-time to prevent runtime HEAD "
+                "drift.",
+            )
+            return
         try:
             wt_path = self.runner.create_worktree(base_commit, node_id)
         except subprocess.CalledProcessError as e:
@@ -878,17 +900,17 @@ class ExperimentOrchestrator:
         import signal as _sig
         from dataclasses import replace
         from automil.cells import list_cells, next_status, write_cell, CellStatus
-        from automil.cells.registry import _cells_dir
 
         now = time.time()
-        try:
-            cells_dir = _cells_dir()
-        except RuntimeError:
-            # No automil/config.yaml found — daemon running in test env without
-            # a project root. Skip cap tick silently (no cells to advance).
-            logger.debug("_tick_cells: no automil dir found; skipping cap tick")
+        # Resolve cells_dir from the orchestrator's explicit automil_dir, not
+        # via the cwd-walking _find_automil_dir() fallback. Tests construct
+        # the orchestrator with a tmp_path automil_dir; the global fallback
+        # would find the host project's untracked `automil/` instead.
+        cells_dir = self.automil_dir / "cells"
+        if not cells_dir.exists():
+            logger.debug("_tick_cells: no cells dir at %s; skipping", cells_dir)
             return
-        for cell in list_cells():
+        for cell in list_cells(cells_dir):
             running = self._running_in_cell(cell.cell_id)
             new_status = next_status(cell, now, len(running))
             if new_status == cell.status:
@@ -926,13 +948,49 @@ class ExperimentOrchestrator:
             )
 
     def _check_running(self):
-        """Poll running experiments for completion or timeout."""
+        """Poll running experiments for completion or timeout.
+
+        Also escalates pending SIGTERM cancels (recorded in
+        ``self._pending_sigkill_at``) to SIGKILL once their grace period
+        has elapsed. Without this, a trainer that ignores SIGTERM (raw C
+        extension, blocked CUDA kernel) would sit in VRAM indefinitely
+        after a cap-driven or operator cancel.
+        """
+        now = time.time()
         for exp_id, exp in list(self.running.items()):
             retcode = exp.process.poll()
             if retcode is not None:
+                self._pending_sigkill_at.pop(exp_id, None)
                 self._handle_completion(exp_id, retcode)
-            elif time.time() > exp.timeout_at:
+                continue
+            if now > exp.timeout_at:
                 self._handle_timeout(exp_id)
+                continue
+            deadline = self._pending_sigkill_at.get(exp_id)
+            if deadline is not None and now >= deadline:
+                self._escalate_to_sigkill(exp_id)
+
+    def _escalate_to_sigkill(self, node_id: str) -> None:
+        """SIGKILL the process group when a previously-issued SIGTERM
+        wasn't enough. Removes the pending-deadline entry whether or not
+        the kill succeeded; the next poll will reap the exit code."""
+        self._pending_sigkill_at.pop(node_id, None)
+        exp = self.running.get(node_id)
+        if exp is None:
+            return
+        pid = exp.process.pid
+        if exp.process.poll() is not None:
+            return  # already exited between deadline check and now
+        logger.warning(
+            "_escalate_to_sigkill: SIGTERM grace expired for %s (PID %d); "
+            "sending SIGKILL", node_id, pid,
+        )
+        try:
+            os.killpg(os.getpgid(pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            logger.warning("_escalate_to_sigkill: killpg failed: %s", exc)
 
     def _read_fold_count_for_node(self, node_id: str) -> int:
         """Read AUTOMIL_FOLD_COUNT from the node spec env, or fall back to config.
@@ -1250,10 +1308,17 @@ class ExperimentOrchestrator:
     def _kill_experiment(self, node_id: str, sig: int = signal.SIGTERM) -> bool:
         """Send *sig* to the process group of *node_id* and return True if found.
 
-        Called by LocalBackend.cancel (BCK-02 / D-57).  Fire-and-forget —
-        state transition to ``cancelled`` is observed via subsequent poll()
-        calls against the on-disk state.  Uses the same starttime cross-check
-        as ``_handle_timeout`` (CLN-04 / D-17) to guard against PID reuse.
+        Called by LocalBackend.cancel (BCK-02 / D-57).  Returns immediately
+        after the signal goes out — state transition to ``cancelled`` is
+        observed via subsequent poll() calls against the on-disk state.
+        Uses the same starttime cross-check as ``_handle_timeout``
+        (CLN-04 / D-17) to guard against PID reuse.
+
+        For SIGTERM-style cancels, also records a SIGKILL escalation
+        deadline in ``self._pending_sigkill_at``. The next
+        ``_check_running`` tick after the grace period (5s) will SIGKILL
+        the process group if it hasn't exited. SIGKILL itself is not
+        escalated (already maximum force).
 
         Returns:
             True  — signal was delivered to the process group.
@@ -1281,6 +1346,8 @@ class ExperimentOrchestrator:
             logger.info("_kill_experiment: PID %d already gone", pid)
         except OSError as e:
             logger.warning("_kill_experiment: os.killpg failed: %s", e)
+        if sig == signal.SIGTERM:
+            self._pending_sigkill_at[node_id] = time.time() + 5.0
         return True
 
     def _mark_crashed(self, node_id: str, spec: dict, error: str):
@@ -1306,23 +1373,48 @@ class ExperimentOrchestrator:
         )
 
     def _append_results_tsv(self, node_id: str, result: dict, description: str = ""):
-        """Append a row to results.tsv (sole writer, no locking needed)."""
+        """Append a row to results.tsv (sole writer, no locking needed).
+
+        Metric columns are derived from the keys of ``result["metrics"]``
+        on first write — no hardcoded MIL-vocabulary. The header is
+        ``node_id, <metric_keys sorted>, composite, vram_gb, elapsed_min,
+        status, description``. Subsequent rows are aligned to the
+        existing header by parsing it from disk; missing keys are filled
+        with empty strings so the file remains a valid TSV across
+        schema drift.
+        """
         metrics = result.get("metrics", {})
         composite = result.get("composite", 0.0)
         status = result.get("status", "completed")
         elapsed_s = result.get("elapsed_seconds", 0)
         vram_mb = result.get("peak_vram_mb", 0)
 
-        header = "node_id\tval_auc\tval_bacc\ttest_auc\ttest_bacc\tcomposite\tvram_gb\telapsed_min\tstatus\tdescription\n"
         if not self.results_tsv.exists() or self.results_tsv.stat().st_size == 0:
-            self.results_tsv.write_text(header)
+            metric_cols = sorted(metrics.keys())
+            header_cols = ["node_id"] + metric_cols + [
+                "composite", "vram_gb", "elapsed_min", "status", "description",
+            ]
+            self.results_tsv.write_text("\t".join(header_cols) + "\n")
+        else:
+            first_line = self.results_tsv.read_text().split("\n", 1)[0]
+            header_cols = first_line.split("\t")
+            metric_cols = [
+                c for c in header_cols
+                if c not in {"node_id", "composite", "vram_gb",
+                             "elapsed_min", "status", "description"}
+            ]
 
-        row = "\t".join([
-            node_id,
-            f"{metrics.get('val_auc', 0):.4f}",
-            f"{metrics.get('val_bacc', 0):.4f}",
-            f"{metrics.get('test_auc', 0):.4f}",
-            f"{metrics.get('test_bacc', 0):.4f}",
+        def _fmt(v) -> str:
+            if v is None or v == "":
+                return ""
+            try:
+                return f"{float(v):.4f}"
+            except (TypeError, ValueError):
+                return str(v)
+
+        cells: list[str] = [node_id]
+        cells.extend(_fmt(metrics.get(c, "")) for c in metric_cols)
+        cells.extend([
             f"{composite:.6f}",
             f"{vram_mb / 1024:.1f}",
             f"{elapsed_s / 60:.1f}",
@@ -1330,7 +1422,7 @@ class ExperimentOrchestrator:
             description or node_id,
         ])
         with open(self.results_tsv, "a") as f:
-            f.write(row + "\n")
+            f.write("\t".join(cells) + "\n")
 
     # --- Main loop ---
 

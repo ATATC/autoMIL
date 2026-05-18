@@ -94,12 +94,18 @@ def get_cell(cell_id: str) -> Cell | None:
         return None
 
 
-def list_cells() -> list[Cell]:
-    """Return all cells under automil/cells/, sorted by cell_id.
+def list_cells(cells_dir: Path | None = None) -> list[Cell]:
+    """Return all cells under ``cells_dir`` (or ``automil/cells/``), sorted
+    by cell_id.
 
-    Malformed cell files are skipped with logger.warning.
+    Pass ``cells_dir`` explicitly from a callsite that already knows its
+    project root (the orchestrator daemon has ``self.automil_dir``) — the
+    ``_find_automil_dir()`` cwd-walk fallback only works when invoked from
+    inside the consumer project, not from a tmp-path sandbox or another
+    cwd. Malformed cell files are skipped with ``logger.warning``.
     """
-    cells_dir = _cells_dir()
+    if cells_dir is None:
+        cells_dir = _cells_dir()
     if not cells_dir.exists():
         return []
     cells: list[Cell] = []
