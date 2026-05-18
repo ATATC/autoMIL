@@ -197,3 +197,47 @@ class TestPatientLevelStratification:
             create_strategy_splits(
                 str(csv_path), splits_dir, strategy_cfg, n_splits=2, seed=42,
             )
+
+    def test_raises_when_n_splits_exceeds_minority_count(self, tmp_path, registries):
+        """Upfront feasibility check: n_splits > min class case count is
+        infeasible; sklearn raises mid-fit with a generic message. The
+        wrapper should refuse early with concrete numbers so the operator
+        can drop n_splits.
+        """
+        # 8 cases of class "a", 2 cases of class "b" -> minority = 2
+        rows = []
+        for i in range(8):
+            rows.append({"case_id": f"a{i:02d}", "slide_id": f"a{i:02d}_s0", "label": "a"})
+        for i in range(2):
+            rows.append({"case_id": f"b{i:02d}", "slide_id": f"b{i:02d}_s0", "label": "b"})
+        csv_path = tmp_path / "imbalanced.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        splits_dir = str(tmp_path / "splits_bad")
+        strategy_cfg = registries.strategy_registry["standard"]
+        with pytest.raises(ValueError, match=r"smallest class has only 2"):
+            create_strategy_splits(
+                str(csv_path), splits_dir, strategy_cfg, n_splits=10, seed=42,
+            )
+
+    def test_raises_when_inner_val_infeasible(self, tmp_path, registries):
+        """After the outer fold removes ~1/n cases, the train_val side
+        of the smallest class must still have >= 2 cases so stratified
+        train_test_split can carve a val. Catch this upfront."""
+        # 3 cases of class "a", 3 cases of class "b" -> with n_splits=3,
+        # each class loses 1 to test, leaves only 2 -> still OK.
+        # Trigger the inner-val guard with 2 cases per class + n_splits=2:
+        # outer keeps 1 case in train_val for each class -> infeasible.
+        rows = [
+            {"case_id": "a0", "slide_id": "a0_s0", "label": "a"},
+            {"case_id": "a1", "slide_id": "a1_s0", "label": "a"},
+            {"case_id": "b0", "slide_id": "b0_s0", "label": "b"},
+            {"case_id": "b1", "slide_id": "b1_s0", "label": "b"},
+        ]
+        csv_path = tmp_path / "tiny.csv"
+        pd.DataFrame(rows).to_csv(csv_path, index=False)
+        splits_dir = str(tmp_path / "splits_tiny")
+        strategy_cfg = registries.strategy_registry["standard"]
+        with pytest.raises(ValueError, match=r"inner val"):
+            create_strategy_splits(
+                str(csv_path), splits_dir, strategy_cfg, n_splits=2, seed=42,
+            )

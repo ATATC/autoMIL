@@ -74,6 +74,78 @@ class TestComputeExtendedMetrics:
         assert np.isnan(m["auc_roc"])
 
 
+class TestMultiClassAUC:
+    """Multi-class AUC must match CLAM upstream's per-class roc_curve + nanmean
+    formula (lib/CLAM/utils/core_utils.py:514-527), NOT sklearn's
+    roc_auc_score(multi_class='ovr', average='macro'). The two formulas
+    diverge in finite samples; we lock in the CLAM-style result for the
+    CLAM path so reported AUCs are reproducible against CLAM's own.
+    """
+
+    def test_uses_clam_style_per_class_nanmean(self):
+        from sklearn.metrics import auc as sk_auc, roc_auc_score, roc_curve
+        from sklearn.preprocessing import label_binarize
+
+        rng = np.random.default_rng(0)
+        n_classes = 3
+        n_samples = 90
+        y_true = np.array([i % n_classes for i in range(n_samples)])
+        # Probabilities that favour the true class with noise.
+        y_probs = rng.dirichlet(alpha=[1] * n_classes, size=n_samples)
+        for i in range(n_samples):
+            y_probs[i, y_true[i]] += 0.5
+            y_probs[i] /= y_probs[i].sum()
+        y_pred = y_probs.argmax(axis=1)
+
+        m = compute_extended_metrics(y_true, y_probs, y_pred, n_classes)
+
+        # Recompute the CLAM-upstream expected value
+        binary = label_binarize(y_true, classes=list(range(n_classes)))
+        per_class = []
+        for c in range(n_classes):
+            fpr, tpr, _ = roc_curve(binary[:, c], y_probs[:, c])
+            per_class.append(float(sk_auc(fpr, tpr)))
+        expected_clam = float(np.nanmean(per_class))
+
+        sklearn_ovr_macro = float(
+            roc_auc_score(y_true, y_probs, multi_class="ovr", average="macro")
+        )
+
+        assert m["auc_roc"] == pytest.approx(expected_clam, abs=1e-9)
+        # The two formulas agree in this perfectly-balanced case to within
+        # ~1e-9; we assert the metric is computed in a way consistent with
+        # the per-class formula. In imbalanced multi-class settings the
+        # formulas diverge — that's where this test would catch a
+        # regression to sklearn's macro-OvR.
+        # Sanity: both formulas are bounded in [0, 1].
+        assert 0.0 <= m["auc_roc"] <= 1.0
+        assert 0.0 <= sklearn_ovr_macro <= 1.0
+
+    def test_missing_class_yields_nanmean_over_present(self):
+        """When a class has zero positives in the test split, CLAM upstream
+        skips it via ``nanmean``. The wrapper must do the same — sklearn's
+        roc_auc_score raises in this case, so any regression to OvR-macro
+        would fail loudly.
+        """
+        # 3-class problem; class 2 has zero positives in y_true
+        y_true = np.array([0, 0, 1, 1, 0, 1])
+        y_probs = np.array(
+            [
+                [0.7, 0.2, 0.1],
+                [0.6, 0.3, 0.1],
+                [0.2, 0.7, 0.1],
+                [0.3, 0.6, 0.1],
+                [0.8, 0.1, 0.1],
+                [0.1, 0.8, 0.1],
+            ]
+        )
+        y_pred = y_probs.argmax(axis=1)
+        m = compute_extended_metrics(y_true, y_probs, y_pred, 3)
+        # AUC should be a real number (nanmean of present-class AUCs), not nan
+        assert not np.isnan(m["auc_roc"])
+        assert 0.0 <= m["auc_roc"] <= 1.0
+
+
 class TestComputeConfidenceIntervals:
     def test_basic_ci(self):
         fold_metrics = [

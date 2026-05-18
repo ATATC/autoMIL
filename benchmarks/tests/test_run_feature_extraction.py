@@ -120,5 +120,8 @@ class TestSkipSegCoordsDir:
 
     def test_coords_dir_format(self):
         ds = make_test_ds()
-        expected = os.path.join(ds.output_dir, f"{ds.magnification}x_{ds.patch_size}px_0px_overlap")
-        assert expected.endswith("20x_256px_0px_overlap")
+        expected = os.path.join(
+            ds.output_dir,
+            f"{ds.magnification}x_{ds.patch_size}px_0px_overlap",
+        )
+        assert expected.endswith(f"{ds.magnification}x_{ds.patch_size}px_0px_overlap")

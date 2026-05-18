@@ -184,3 +184,54 @@ class TestEarlyStopping:
         assert es.counter == 2
         es(3, 0.4, model, ckpt)  # new best
         assert es.counter == 0
+
+
+class TestSubtypingDynamic:
+    """clam/train.py sets ``subtyping=(exp_cfg.task.n_classes > 2)``.
+
+    Binary tasks (label_smoothing-only, mutation status) keep
+    ``subtyping=False`` so CLAM routes to the simple bag-loss path; multi-
+    class tasks (CLWD subtype_7class etc.) get ``subtyping=True`` so
+    CLAM routes to the per-class instance-loss path
+    (``lib/CLAM/models/model_clam.py:146-168``). A hardcoded False would
+    silently use the wrong path on multi-class. Locking this in.
+    """
+
+    def _make_exp_cfg(self, n_classes: int):
+        from autobench.pipeline.config import (
+            ExperimentConfig,
+            Framework,
+            ModelConfig,
+            TaskConfig,
+            TrainConfig,
+        )
+        return ExperimentConfig(
+            task=TaskConfig(
+                name="t",
+                label_col="label",
+                label_dict={f"c{i}": i for i in range(n_classes)},
+                n_classes=n_classes,
+            ),
+            encoder_key="conch_v15",
+            embed_dim=512,
+            model=ModelConfig(model_type="clam_mb"),
+            train=TrainConfig(),
+            n_folds=10,
+            framework=Framework.CLAM,
+        )
+
+    def test_binary_task_is_not_subtyping(self, tmp_path):
+        from autobench.pipeline.clam.train import _make_clam_args
+        args = _make_clam_args(self._make_exp_cfg(n_classes=2), str(tmp_path))
+        assert args.subtyping is False
+
+    def test_three_class_task_enables_subtyping(self, tmp_path):
+        from autobench.pipeline.clam.train import _make_clam_args
+        args = _make_clam_args(self._make_exp_cfg(n_classes=3), str(tmp_path))
+        assert args.subtyping is True
+
+    def test_seven_class_task_enables_subtyping(self, tmp_path):
+        """CLWD subtype_7class is the real-world driver for this."""
+        from autobench.pipeline.clam.train import _make_clam_args
+        args = _make_clam_args(self._make_exp_cfg(n_classes=7), str(tmp_path))
+        assert args.subtyping is True
