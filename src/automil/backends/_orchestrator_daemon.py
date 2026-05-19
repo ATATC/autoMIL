@@ -622,7 +622,16 @@ class ExperimentOrchestrator:
         self.gpu_state_file.write_text(json.dumps(state, indent=2) + "\n")
 
     def _recover_orphans(self):
-        """Mark orphaned running experiments as crashed and clean up worktrees."""
+        """Mark orphaned running experiments as crashed and clean up worktrees.
+
+        SIGKILLs the recorded process group before marking the node crashed:
+        when the daemon restarts after a mid-run crash, any pending SIGKILL
+        escalation from a prior ``_kill_experiment`` SIGTERM was lost with the
+        previous process's memory. The training subprocess may still be alive
+        and holding VRAM. Reading ``metadata.pid`` + ``metadata.starttime_ticks``
+        from the running spec lets us reap the orphan before marking it crashed
+        (D-17 starttime cross-check defends against PID reuse).
+        """
         if not self.running_dir.exists():
             return
         for f in self.running_dir.glob("*.json"):
@@ -630,6 +639,8 @@ class ExperimentOrchestrator:
                 spec = json.loads(f.read_text())
                 node_id = spec.get("id", f.stem)
                 logger.info(f"Orphaned experiment {node_id} found, marking as crashed")
+
+                self._sigkill_orphan_pg(node_id, spec)
 
                 archive = self.archive_dir / node_id
                 archive.mkdir(parents=True, exist_ok=True)
@@ -648,6 +659,47 @@ class ExperimentOrchestrator:
                     self.runner.cleanup_worktree(wt)
             except Exception:
                 continue
+
+    def _sigkill_orphan_pg(self, node_id: str, spec: dict) -> None:
+        """SIGKILL an orphaned process group recorded in the running spec.
+
+        Reads ``spec['metadata']['pid']`` + ``spec['metadata']['starttime_ticks']``
+        (written by ``_launch``). Verifies the PID's starttime matches before
+        signalling (PID reuse defence, CLN-04 / D-17). Soft-fails: logs and
+        continues if the spec lacks PID metadata (legacy specs from pre-fix
+        launches) or the process has already exited.
+        """
+        meta = spec.get("metadata") or {}
+        pid_raw = meta.get("pid")
+        starttime_recorded = meta.get("starttime_ticks")
+        if pid_raw is None:
+            # Legacy spec (pre-PID-persistence) or backend that doesn't track PIDs.
+            return
+        try:
+            pid = int(pid_raw)
+        except (TypeError, ValueError):
+            logger.warning("orphan %s has unparseable pid %r; skipping SIGKILL", node_id, pid_raw)
+            return
+        if starttime_recorded is not None and not _is_pid_alive_with_starttime(pid, int(starttime_recorded)):
+            logger.info("orphan %s PID %d is gone or reused; no SIGKILL needed", node_id, pid)
+            return
+        try:
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            return
+        except OSError as exc:
+            logger.warning("orphan %s: getpgid(%d) failed: %s", node_id, pid, exc)
+            return
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+            logger.warning(
+                "orphan %s: SIGKILLed pgid %d (daemon restart recovery; freeing VRAM)",
+                node_id, pgid,
+            )
+        except ProcessLookupError:
+            pass
+        except OSError as exc:
+            logger.warning("orphan %s: killpg(%d, SIGKILL) failed: %s", node_id, pgid, exc)
 
     # --- Scheduling ---
 
@@ -859,9 +911,27 @@ class ExperimentOrchestrator:
         # Copy spec to running dir for orphan recovery.
         # Use _backend_running_dir to ensure running/local/ exists (created on demand
         # per D-169; __init__ no longer pre-creates the backend subdir).
-        import shutil
-        running_spec = self._backend_running_dir("local") / f"{node_id}.json"
-        shutil.copy2(archive / "spec.json", running_spec)
+        # The running spec embeds the launched PID (+ starttime_ticks when
+        # readable from /proc) so a daemon-restart orphan recovery can SIGKILL
+        # the leaked pgrp before marking the node crashed. CLN-04 starttime
+        # cross-check defends against PID reuse; if starttime is unreadable at
+        # launch (non-Linux test env, /proc unavailable, fork race), we OMIT
+        # the field — recovery then skips the cross-check and signals anyway,
+        # accepting the small reuse risk over the larger VRAM-leak risk.
+        running_spec_path = self._backend_running_dir("local") / f"{node_id}.json"
+        running_spec_payload = dict(spec_clean)
+        running_spec_meta = dict(running_spec_payload.get("metadata") or {})
+        try:
+            recorded_pgid = os.getpgid(process.pid)
+        except OSError:
+            recorded_pgid = process.pid
+        running_spec_meta["pid"] = process.pid
+        running_spec_meta["pgid"] = recorded_pgid
+        recorded_starttime = _read_proc_starttime(process.pid)
+        if recorded_starttime is not None:
+            running_spec_meta["starttime_ticks"] = recorded_starttime
+        running_spec_payload["metadata"] = running_spec_meta
+        running_spec_path.write_text(json.dumps(running_spec_payload, indent=2))
 
         logger.info(
             f"Launched {node_id} on GPU {gpu_id} "
@@ -1063,7 +1133,16 @@ class ExperimentOrchestrator:
             return {}
 
     def _handle_completion(self, node_id: str, returncode: int):
-        """Process a completed experiment: collect results, write TSV, clean up."""
+        """Process a completed experiment: collect results, write TSV, clean up.
+
+        Orchestrates the per-completion lifecycle by delegating to three
+        single-purpose helpers (each independently testable):
+
+          - ``_was_cap_killed_completion``  → was this a cap-driven cancel?
+          - ``_handle_cap_killed_completion`` → reconcile + cleanup (early return)
+          - ``_collect_or_synthesize_result`` → validated result dict, never None
+          - ``_drain_remote_backend_log``  → cross-backend log unification
+        """
         exp = self.running.pop(node_id)
         if exp.gpu in self.gpu_allocations:
             try:
@@ -1078,11 +1157,75 @@ class ExperimentOrchestrator:
         gpu_id = exp.gpu
         spec = exp.spec
 
-        # Phase 4: detect cap-driven cancel and reconcile to executed (CAP-04 / D-123, D-124).
-        # Check cancel_reason == 'cap' in running/<node>.json first (annotation written by
-        # _tick_cells before backend.cancel() is called — Pitfall 4 ordering guarantee).
-        # Fall back to archive/<node>/spec.json in case running/ was already cleaned up.
-        cap_killed = False
+        # CAP-04 cap-driven cancel branch — never falls through to the standard path.
+        if self._was_cap_killed_completion(node_id):
+            self._handle_cap_killed_completion(node_id, wt_path)
+            return
+
+        result = self._collect_or_synthesize_result(node_id, archive, returncode, wt_path)
+
+        # Write completion notification with all fields reconcile needs
+        completion = {
+            "id": node_id,
+            "status": result.get("status", "completed"),
+            "composite": result.get("composite", 0),
+            "metrics": result.get("metrics", {}),
+            "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
+            "peak_vram_mb": result.get("peak_vram_mb", 0),
+            "gpu": gpu_id,
+            "completed_at": datetime.now().isoformat(),
+            "graph_metadata": result.get("graph_metadata") or spec.get("graph_metadata") or {},
+        }
+
+        # Include error details in completion for better agent visibility
+        status = result.get("status", "completed")
+        if status in ("crash", "oom", "timeout"):
+            log_path = archive / "run.log"
+            error_tail = ""
+            if log_path.exists():
+                lines = log_path.read_text().splitlines()
+                error_tail = "\n".join(lines[-20:])
+            completion["error"] = error_tail
+            completion["log_location"] = str(log_path)
+
+        (self.completed_dir / f"{node_id}.json").write_text(
+            json.dumps(completion, indent=2) + "\n"
+        )
+
+        # Append to results.tsv (sole writer)
+        self._append_results_tsv(node_id, result, description=spec.get("description", ""))
+
+        # D-170: cross-backend log unification (no-op for local backend).
+        self._drain_remote_backend_log(node_id, archive)
+
+        # Clean running spec
+        running_spec = self.running_dir / f"{node_id}.json"
+        if running_spec.exists():
+            running_spec.unlink()
+
+        # Cleanup worktree
+        if wt_path.exists():
+            self.runner.cleanup_worktree(wt_path)
+
+        # Clear timeout flag
+        self._timed_out.pop(node_id, None)
+
+        status_str = result.get("status", "unknown")
+        composite = result.get("composite", 0)
+        logger.info(
+            f"Completed {node_id}: status={status_str}, "
+            f"composite={composite:.4f}, elapsed={elapsed_s / 60:.1f}min, GPU {gpu_id}"
+        )
+
+    # --- _handle_completion helpers (each independently testable) ---
+
+    def _was_cap_killed_completion(self, node_id: str) -> bool:
+        """True iff the running or archive spec has metadata.cancel_reason == 'cap'.
+
+        Reads running/<node>.json first (annotation written by _tick_cells
+        BEFORE backend.cancel() is called — Pitfall 4 ordering guarantee).
+        Falls back to archive/<node>/spec.json if running/ was already cleaned.
+        """
         for _spec_path in (
             self.running_dir / f"{node_id}.json",
             self.archive_dir / node_id / "spec.json",
@@ -1091,68 +1234,90 @@ class ExperimentOrchestrator:
                 try:
                     _raw = json.loads(_spec_path.read_text())
                     if _raw.get("metadata", {}).get("cancel_reason") == "cap":
-                        cap_killed = True
-                        break
+                        return True
                 except (json.JSONDecodeError, OSError):
                     pass
-        if cap_killed:
-            from automil.cells.reconcile import reconcile_budget_kill
-            expected_folds = self._read_fold_count_for_node(node_id)
-            payload = reconcile_budget_kill(
-                node_id=node_id,
-                archive_dir=self.archive_dir,
-                graph=self.graph if hasattr(self, "graph") else None,
-                expected_fold_count=expected_folds,
-            )
-            # Per PINNED API in <interfaces>: the running node already exists in the graph
-            # (created by submit() as type=running). We must NOT call add_executed (it
-            # generates a NEW node and would double-count). Instead promote-in-place via
-            # direct dict mutation mirroring mark_failed's pattern (graph.py:272-280).
-            if hasattr(self, "graph") and self.graph is not None:
-                gnode = self.graph.get_node(node_id)
-                if gnode is None:
-                    logger.warning(
-                        "Cap-killed node %s missing from graph; cannot reconcile graph state",
-                        node_id,
-                    )
-                elif payload.get("partial_folds", 0) >= 1:
-                    # Promote running -> executed with partial composite.
-                    gnode["type"] = "executed"
-                    gnode["status"] = "keep"
-                    gnode["composite"] = payload["composite"]
-                    # D-200 / DEC-04: write metrics under node["metrics"], not top-level.
-                    if payload.get("metrics"):
-                        gnode["metrics"] = dict(payload["metrics"])
-                    gnode.setdefault("metadata", {})["budget_killed"] = True
-                    self.graph._reevaluate_descendants(node_id)
-                    self.graph.save()
-                else:
-                    # Zero usable folds — crash semantics + budget_killed flag
-                    self.graph.mark_failed(
-                        node_id=node_id,
-                        status="crash",
-                        error="cap fired with zero completed folds",
-                    )
-                    gnode = self.graph.get_node(node_id)
-                    if gnode is not None:
-                        gnode.setdefault("metadata", {})["budget_killed"] = True
-                        self.graph.save()
-            logger.info(
-                "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
-                "partial_folds=%d/%d",
-                node_id, payload["status"], payload["composite"],
-                payload.get("partial_folds", 0), payload.get("expected_folds", 0),
-            )
-            # Clean running spec and worktree before returning
-            running_spec = self.running_dir / f"{node_id}.json"
-            if running_spec.exists():
-                running_spec.unlink()
-            if wt_path.exists():
-                self.runner.cleanup_worktree(wt_path)
-            self._timed_out.pop(node_id, None)
-            return  # do NOT fall through to the standard completion path
+        return False
 
-        # Try to collect result.json from worktree
+    def _handle_cap_killed_completion(self, node_id: str, wt_path: Path) -> None:
+        """Cap-driven cancel reconcile + cleanup (CAP-04 / D-123, D-124).
+
+        Aggregates per-fold partial results, promotes the in-graph node from
+        running -> executed (or marks crashed if zero usable folds), and
+        cleans the running spec + worktree. Never throws; soft-fails to logged
+        warnings on graph access errors.
+        """
+        from automil.cells.reconcile import reconcile_budget_kill
+
+        expected_folds = self._read_fold_count_for_node(node_id)
+        payload = reconcile_budget_kill(
+            node_id=node_id,
+            archive_dir=self.archive_dir,
+            graph=self.graph if hasattr(self, "graph") else None,
+            expected_fold_count=expected_folds,
+        )
+        # Per PINNED API in <interfaces>: the running node already exists in the graph
+        # (created by submit() as type=running). We must NOT call add_executed (it
+        # generates a NEW node and would double-count). Instead promote-in-place via
+        # direct dict mutation mirroring mark_failed's pattern (graph.py:272-280).
+        if hasattr(self, "graph") and self.graph is not None:
+            gnode = self.graph.get_node(node_id)
+            if gnode is None:
+                logger.warning(
+                    "Cap-killed node %s missing from graph; cannot reconcile graph state",
+                    node_id,
+                )
+            elif payload.get("partial_folds", 0) >= 1:
+                # Promote running -> executed with partial composite.
+                gnode["type"] = "executed"
+                gnode["status"] = "keep"
+                gnode["composite"] = payload["composite"]
+                # D-200 / DEC-04: write metrics under node["metrics"], not top-level.
+                if payload.get("metrics"):
+                    gnode["metrics"] = dict(payload["metrics"])
+                gnode.setdefault("metadata", {})["budget_killed"] = True
+                self.graph._reevaluate_descendants(node_id)
+                self.graph.save()
+            else:
+                # Zero usable folds — crash semantics + budget_killed flag
+                self.graph.mark_failed(
+                    node_id=node_id,
+                    status="crash",
+                    error="cap fired with zero completed folds",
+                )
+                gnode = self.graph.get_node(node_id)
+                if gnode is not None:
+                    gnode.setdefault("metadata", {})["budget_killed"] = True
+                    self.graph.save()
+        logger.info(
+            "Cap-driven cancel reconciled for %s: status=%s composite=%.4f "
+            "partial_folds=%d/%d",
+            node_id, payload["status"], payload["composite"],
+            payload.get("partial_folds", 0), payload.get("expected_folds", 0),
+        )
+        # Clean running spec and worktree
+        running_spec = self.running_dir / f"{node_id}.json"
+        if running_spec.exists():
+            running_spec.unlink()
+        if wt_path.exists():
+            self.runner.cleanup_worktree(wt_path)
+        self._timed_out.pop(node_id, None)
+
+    def _collect_or_synthesize_result(
+        self, node_id: str, archive: Path, returncode: int, wt_path: Path,
+    ) -> dict:
+        """Return a valid result dict for the experiment, never None.
+
+        Three branches:
+          1. result.json exists in the worktree → schema-validate via D-201;
+             on schema failure synthesize a crash payload citing the schema
+             pointer so the consumer can self-correct.
+          2. result.json absent → synthesize from log heuristics
+             (CUDA OOM / timeout / nonzero returncode / clean exit), persist
+             the synthesised payload to archive/result.json.
+          3. Either branch — backfill ``status`` if the result was schema-
+             valid but missing the top-level status hint.
+        """
         result = self.runner.collect_result(wt_path, archive)
 
         # D-201 / DEC-03: validate result.json against
@@ -1202,94 +1367,53 @@ class ExperimentOrchestrator:
         if "status" not in result:
             result["status"] = "completed" if returncode == 0 else "crash"
 
-        # Write completion notification with all fields reconcile needs
-        completion = {
-            "id": node_id,
-            "status": result.get("status", "completed"),
-            "composite": result.get("composite", 0),
-            "metrics": result.get("metrics", {}),
-            "elapsed_seconds": result.get("elapsed_seconds", elapsed_s),
-            "peak_vram_mb": result.get("peak_vram_mb", 0),
-            "gpu": gpu_id,
-            "completed_at": datetime.now().isoformat(),
-            "graph_metadata": result.get("graph_metadata") or spec.get("graph_metadata") or {},
-        }
+        return result
 
-        # Include error details in completion for better agent visibility
-        status = result.get("status", "completed")
-        if status in ("crash", "oom", "timeout"):
-            log_path = archive / "run.log"
-            error_tail = ""
-            if log_path.exists():
-                lines = log_path.read_text().splitlines()
-                error_tail = "\n".join(lines[-20:])
-            completion["error"] = error_tail
-            completion["log_location"] = str(log_path)
+    def _drain_remote_backend_log(self, node_id: str, archive: Path) -> None:
+        """D-170: cross-backend log unification.
 
-        (self.completed_dir / f"{node_id}.json").write_text(
-            json.dumps(completion, indent=2) + "\n"
-        )
-
-        # Append to results.tsv (sole writer)
-        self._append_results_tsv(node_id, result, description=spec.get("description", ""))
-
-        # D-170: cross-backend log unification.
-        # For non-local backends, the orchestrator drains backend.log_iter()
-        # into archive/<id>/run.log. The local backend already writes this file
-        # inline (via log_fh in _launch); we only add the cross-backend drain
-        # for SLURM/Ray cases where archive run.log doesn't yet exist.
+        For non-local backends, the orchestrator drains backend.log_iter()
+        into archive/<id>/run.log. The local backend already writes this file
+        inline (via log_fh in _launch); we only add the cross-backend drain
+        for SLURM/Ray cases where archive run.log doesn't yet exist.
+        For SLURM nodes, also symlinks submitit's native log files (D-171).
+        Soft-fails to a logged warning on any backend error.
+        """
         archive_run_log = archive / "run.log"
         backend_name_for_node = self._read_backend_name_for_node(node_id)
-        if backend_name_for_node and backend_name_for_node != "local" and not archive_run_log.exists():
-            try:
-                from automil.backends import BACKENDS  # noqa: PLC0415
-                from automil.backends.base import JobHandle  # noqa: PLC0415
-                BackendCls = BACKENDS.get(backend_name_for_node)
-                if BackendCls is not None:
-                    spec_data = self._read_running_spec(node_id, backend_name_for_node)
-                    drain_handle = JobHandle(
-                        node_id=node_id,
-                        backend=backend_name_for_node,
-                        opaque_id=spec_data.get("opaque_id", ""),
-                        submitted_at=spec_data.get("submitted_at", 0.0),
-                    )
-                    # Reuse the configured backend instance if it matches; else instantiate.
-                    _backend = (
-                        self.backend
-                        if (
-                            self.backend is not None
-                            and getattr(self.backend, "_backend_name", None) == backend_name_for_node
-                        )
-                        else BackendCls(self.automil_dir, self.config)
-                    )
-                    drain_lines = _drain_log_iter_with_timeout(_backend, drain_handle, timeout=60.0)
-                    _atomic_write_lines(archive_run_log, drain_lines)
-                    # D-171: for SLURM nodes, symlink submitit's native log files into archive/.
-                    if backend_name_for_node == "slurm":
-                        _symlink_slurm_logs(self.automil_dir, archive, spec_data)
-            except Exception as exc:
-                logger.warning(
-                    "D-170 cross-backend log unification failed for %s: %s", node_id, exc
+        if not (backend_name_for_node and backend_name_for_node != "local" and not archive_run_log.exists()):
+            return
+        try:
+            from automil.backends import BACKENDS  # noqa: PLC0415
+            from automil.backends.base import JobHandle  # noqa: PLC0415
+            BackendCls = BACKENDS.get(backend_name_for_node)
+            if BackendCls is None:
+                return
+            spec_data = self._read_running_spec(node_id, backend_name_for_node)
+            drain_handle = JobHandle(
+                node_id=node_id,
+                backend=backend_name_for_node,
+                opaque_id=spec_data.get("opaque_id", ""),
+                submitted_at=spec_data.get("submitted_at", 0.0),
+            )
+            # Reuse the configured backend instance if it matches; else instantiate.
+            _backend = (
+                self.backend
+                if (
+                    self.backend is not None
+                    and getattr(self.backend, "_backend_name", None) == backend_name_for_node
                 )
-
-        # Clean running spec
-        running_spec = self.running_dir / f"{node_id}.json"
-        if running_spec.exists():
-            running_spec.unlink()
-
-        # Cleanup worktree
-        if wt_path.exists():
-            self.runner.cleanup_worktree(wt_path)
-
-        # Clear timeout flag
-        self._timed_out.pop(node_id, None)
-
-        status_str = result.get("status", "unknown")
-        composite = result.get("composite", 0)
-        logger.info(
-            f"Completed {node_id}: status={status_str}, "
-            f"composite={composite:.4f}, elapsed={elapsed_s / 60:.1f}min, GPU {gpu_id}"
-        )
+                else BackendCls(self.automil_dir, self.config)
+            )
+            drain_lines = _drain_log_iter_with_timeout(_backend, drain_handle, timeout=60.0)
+            _atomic_write_lines(archive_run_log, drain_lines)
+            # D-171: for SLURM nodes, symlink submitit's native log files into archive/.
+            if backend_name_for_node == "slurm":
+                _symlink_slurm_logs(self.automil_dir, archive, spec_data)
+        except Exception as exc:
+            logger.warning(
+                "D-170 cross-backend log unification failed for %s: %s", node_id, exc
+            )
 
     def _handle_timeout(self, exp_id: str):
         """Terminate a timed-out experiment and its full process group.
