@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager
-def locked_update(graph_path: str | Path):
+def locked_update(graph_path: str | Path, *, technique_map: dict[str, str] | None = None):
     """Read-modify-write context manager for graph.json under a fcntl lock.
 
     Use this whenever a process needs to mutate ``graph.json`` to prevent
@@ -41,6 +41,11 @@ def locked_update(graph_path: str | Path):
     Atomic-rename in ``save()`` alone prevented torn writes but not
     lost updates; this context manager is the fix for the race the
     audit flagged.
+
+    ``technique_map`` is forwarded to the constructed ExperimentGraph so
+    consumer-supplied vocabularies (declared in ``automil/config.yaml``:
+    ``scoring.technique_map``) drive auto-extraction inside the locked
+    block. None preserves the framework's empty default.
     """
     path = Path(graph_path)
     lock_path = path.with_suffix(path.suffix + ".lock")
@@ -48,7 +53,7 @@ def locked_update(graph_path: str | Path):
     lock_f = open(lock_path, "w")
     try:
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
-        graph = ExperimentGraph(path=path)
+        graph = ExperimentGraph(path=path, technique_map=technique_map)
         yield graph
         graph.save()
     finally:
@@ -119,8 +124,8 @@ class ExperimentGraph:
             )
 
     @staticmethod
-    def load(path: str | Path) -> ExperimentGraph:
-        return ExperimentGraph(path=path)
+    def load(path: str | Path, technique_map: dict[str, str] | None = None) -> ExperimentGraph:
+        return ExperimentGraph(path=path, technique_map=technique_map)
 
     @property
     def meta(self) -> dict:
@@ -169,6 +174,22 @@ class ExperimentGraph:
         })
 
     # --- Writing ---
+    def _auto_extract_if_empty(self, description: str, techniques: list[str]) -> list[str]:
+        """If techniques is empty and a consumer technique_map is configured,
+        auto-extract tags from the description.
+
+        Backward-compatible: when the technique_map is empty (framework default)
+        OR techniques is non-empty (explicit caller input), this is a no-op.
+        Consumers opt in by populating ``scoring.technique_map`` in
+        ``automil/config.yaml`` and threading it through via
+        ``cli/_helpers._load_technique_map``.
+        """
+        if techniques:
+            return techniques
+        if not self._technique_map:
+            return techniques
+        return self._extract_techniques(description)
+
     def add_executed(self, parent_id: str | None, description: str,
                      techniques: list[str], metrics: dict,
                      status: str = "discard", commit: str | None = None,
@@ -178,6 +199,7 @@ class ExperimentGraph:
         parent = self.get_node(parent_id) if parent_id else None
         parent_composite = parent.get("composite", 0.0) if parent else 0.0
         composite = metrics.get("composite", 0.0)
+        techniques = self._auto_extract_if_empty(description, techniques)
 
         node = {
             "id": nid,
@@ -226,6 +248,7 @@ class ExperimentGraph:
                      expected_gain: str = "low", effort: str = "low",
                      tier: int = 2) -> str:
         nid = self.next_id()
+        techniques = self._auto_extract_if_empty(description, techniques)
         node = {
             "id": nid,
             "parent_id": parent_id,

@@ -23,7 +23,7 @@ from pathlib import Path
 import click
 
 from automil.cli import main
-from automil.cli._helpers import _find_automil_dir, _find_git_root
+from automil.cli._helpers import _find_automil_dir, _find_git_root, _load_technique_map
 from automil.cli.lifecycle._shared import _get_node_or_die
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,7 @@ def resubmit(node_id: str) -> None:
 
     # Step 4: generate a NEW node_id.
     graph_path = adir / "graph.json"
-    graph = ExperimentGraph(path=str(graph_path))
+    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
     new_node_id: str = graph.next_id()
 
     # Step 5–6: resolve backend name.

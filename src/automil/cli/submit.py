@@ -12,7 +12,12 @@ import click
 import yaml
 
 from automil.cli import main
-from automil.cli._helpers import _find_automil_dir, _find_git_root, _matches_scope
+from automil.cli._helpers import (
+    _find_automil_dir,
+    _find_git_root,
+    _load_technique_map,
+    _matches_scope,
+)
 
 
 @main.command()
@@ -380,7 +385,7 @@ def submit(node: str, desc: str, files: tuple, priority: int, vram: float,
     graph_path = adir / "graph.json"
     if graph_path.exists():
         from automil.graph import locked_update
-        with locked_update(graph_path) as graph:
+        with locked_update(graph_path, technique_map=_load_technique_map(adir)) as graph:
             if not graph.get_node(node):
                 # Force the next-allocated id to match `node`. add_proposed
                 # calls next_id() internally; pre-bump meta.next_id to the

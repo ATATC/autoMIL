@@ -4,7 +4,7 @@ from __future__ import annotations
 import click
 
 from automil.cli import main
-from automil.cli._helpers import _find_automil_dir
+from automil.cli._helpers import _find_automil_dir, _load_technique_map
 
 
 @main.command()
@@ -18,7 +18,7 @@ def status():
     graph_path = adir / "graph.json"
     if graph_path.exists():
         from automil.graph import ExperimentGraph
-        graph = ExperimentGraph(path=str(graph_path))
+        graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
         executed = sum(1 for n in graph.nodes.values() if n.get("type") == "executed")
         proposed = sum(1 for n in graph.nodes.values() if n.get("type") == "proposed")
         best = graph.meta.get("best_composite", 0)

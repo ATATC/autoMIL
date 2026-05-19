@@ -30,7 +30,7 @@ def nominate_cmd(node_id: str, agent: bool) -> None:
     Mutates status keep -> candidate. Idempotent. Run `automil promote <node_id>`
     afterwards to evaluate against the parent's pre-registered held-out cells.
     """
-    from automil.cli._helpers import _find_automil_dir
+    from automil.cli._helpers import _find_automil_dir, _load_technique_map
     from automil.gate import nominate
     from automil.graph import ExperimentGraph
 
@@ -38,7 +38,7 @@ def nominate_cmd(node_id: str, agent: bool) -> None:
     graph_path = adir / "graph.json"
     if not graph_path.exists():
         raise click.ClickException(f"No graph.json at {graph_path}")
-    graph = ExperimentGraph(path=str(graph_path))
+    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
     try:
         nominate(node_id, graph, agent_initiated=agent)
     except ValueError as exc:

@@ -133,8 +133,24 @@ env:
 # Examples:
 #   formula: "accuracy"                     # sklearn-iris consumer
 #   formula: "(val_auc + val_bacc + test_auc + test_bacc) / 4"  # autobench consumer
+#
+# scoring.technique_map is a {pattern: tag} dict for description-driven
+# auto-tagging. When `automil submit` / `automil propose` is called WITHOUT
+# --techniques, the framework greps the description (case-insensitive
+# substring) for each `pattern` and appends `tag` to `node['techniques']`.
+# Empty default = framework ships no domain vocabulary (autoMIL is generic).
+# Populate this for your consumer's shorthand:
+#
+#   technique_map:
+#     focal:    focal_loss
+#     rdrop:    rdrop
+#     uni_v2:   uni_v2
+#
+# Used by graph.recalculate_scores' novelty term and by the viz "Techniques"
+# tab. Explicit --techniques on submit/propose still wins over auto-extract.
 scoring:
   formula: ""
+  technique_map: {}
 
 # --- Variant selection (D-35, REG-07) ---
 # The framework resolves these via registry.resolve_model(parent, variant) etc.

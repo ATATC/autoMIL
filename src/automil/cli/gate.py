@@ -314,7 +314,7 @@ def gate_stats_cmd() -> None:
     Reads graph.json to compute how many nominated candidates were promoted
     in the past 30 days, and interprets the rate via diagnose_gate_health.
     """
-    from automil.cli._helpers import _find_automil_dir  # lazy
+    from automil.cli._helpers import _find_automil_dir, _load_technique_map  # lazy
     from automil.gate.stats import diagnose_gate_health
     from automil.graph import ExperimentGraph
 
@@ -324,7 +324,7 @@ def gate_stats_cmd() -> None:
         click.echo("No graph.json found — no experiments have run yet.")
         return
 
-    graph = ExperimentGraph(path=str(graph_path))
+    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
     rate_30 = graph.promotion_rate(days=30)
     nominated_nodes = graph.nominations_in_window(days=30)
     nominated = len(nominated_nodes)

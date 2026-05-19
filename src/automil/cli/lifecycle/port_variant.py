@@ -11,7 +11,7 @@ from typing import Optional
 import click
 
 from automil.cli import main
-from automil.cli._helpers import _find_automil_dir
+from automil.cli._helpers import _find_automil_dir, _load_technique_map
 from automil.cli.lifecycle._shared import (
     _atomic_write_text, _get_node_or_die, _load_registry_or_die,
 )
@@ -286,7 +286,7 @@ def port_variant(node_id: str, name: str | None, kind: str | None, parent: str |
     from automil.graph import ExperimentGraph
 
     graph_path = adir / "graph.json"
-    graph = ExperimentGraph.load(graph_path)
+    graph = ExperimentGraph.load(graph_path, technique_map=_load_technique_map(adir))
     node_record = graph._data["nodes"].get(node_id)
     if node_record is None:
         raise click.ClickException(

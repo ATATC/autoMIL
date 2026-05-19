@@ -10,7 +10,7 @@ from __future__ import annotations
 import click
 
 from automil.cli import main
-from automil.cli._helpers import _find_automil_dir
+from automil.cli._helpers import _find_automil_dir, _load_technique_map
 
 
 @main.command()
@@ -41,7 +41,7 @@ def reconcile(recompute_best: bool, dry_run: bool):
     if recompute_best:
         # CLI-07 path: rebuild meta.best_node_id from executed/keep nodes.
         graph_path = adir / "graph.json"
-        graph = ExperimentGraph.load(graph_path)
+        graph = ExperimentGraph.load(graph_path, technique_map=_load_technique_map(adir))
         old_id, old_c, new_id, new_c = graph.recompute_best()
 
         old_id_str = old_id if old_id is not None else "None"
@@ -68,7 +68,7 @@ def reconcile(recompute_best: bool, dry_run: bool):
     # Default path (D-14): orchestrator-state sync. Body byte-identical to
     # Plan 01's lift from the original cli.py:510-524.
     orch = adir / "orchestrator"
-    graph = ExperimentGraph(path=str(adir / "graph.json"))
+    graph = ExperimentGraph(path=str(adir / "graph.json"), technique_map=_load_technique_map(adir))
     graph.reconcile(
         queue_dir=str(orch / "queue"),
         running_dir=str(orch / "running"),

@@ -36,7 +36,7 @@ def promote_cmd(candidate_id: str, calibrate: bool, backend: str) -> None:
     'keep' (fail), or stays 'candidate' (inconclusive when too many cells skipped
     due to per-cell cap exhaustion — D-150).
     """
-    from automil.cli._helpers import _find_automil_dir
+    from automil.cli._helpers import _find_automil_dir, _load_technique_map
     from automil.gate import promote
     from automil.graph import ExperimentGraph
 
@@ -44,7 +44,7 @@ def promote_cmd(candidate_id: str, calibrate: bool, backend: str) -> None:
     graph_path = adir / "graph.json"
     if not graph_path.exists():
         raise click.ClickException(f"No graph.json at {graph_path}")
-    graph = ExperimentGraph(path=str(graph_path))
+    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
 
     backend_instance = _resolve_backend(backend, adir)
 

@@ -6,7 +6,7 @@ import logging
 import click
 
 from automil.cli import main
-from automil.cli._helpers import _find_automil_dir
+from automil.cli._helpers import _find_automil_dir, _load_technique_map
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def rank(n: int, max_per_branch: int, include_held_out: bool):
         return
 
     from automil.graph import ExperimentGraph
-    graph = ExperimentGraph(path=str(graph_path))
+    graph = ExperimentGraph(path=str(graph_path), technique_map=_load_technique_map(adir))
 
     # D-139: held-out isolation — filter unless operator explicitly opts in.
     if include_held_out:
@@ -77,7 +77,7 @@ def propose(parent: str, desc: str, techniques: tuple):
     """Add a new experiment proposal to the graph."""
     adir = _find_automil_dir()
     from automil.graph import ExperimentGraph
-    graph = ExperimentGraph(path=str(adir / "graph.json"))
+    graph = ExperimentGraph(path=str(adir / "graph.json"), technique_map=_load_technique_map(adir))
 
     # Duplicate guard: refuse exact-description sibling proposals under the
     # same parent that are still pending or running. Prevents waste from
