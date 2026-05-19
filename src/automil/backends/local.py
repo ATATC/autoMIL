@@ -64,7 +64,7 @@ class LocalBackend(Backend):
         project_root: Path | None = None,
         automil_dir: Path | None = None,
     ) -> None:
-        """Instantiate a LocalBackend, wrapping ExperimentOrchestrator.
+        """Instantiate a LocalBackend.  Daemon construction is lazy.
 
         Signature mirrors ExperimentOrchestrator.__init__ exactly (D-61).
         Construction NEVER triggers _recover_orphans — ExperimentOrchestrator
@@ -72,28 +72,56 @@ class LocalBackend(Backend):
         invariant; see CONCERNS.md § "CLI commands must not trigger orphan
         recovery").
 
+        The ExperimentOrchestrator is constructed on first access to any
+        daemon-derived attribute (queue/running/archive dirs, _daemon itself).
+        This lets ``LocalBackend().healthcheck()`` succeed from any cwd —
+        the hardware probe doesn't need a project on disk.  Daemon-required
+        methods (submit, cancel, list_running, log_iter) trigger construction
+        and fail loudly if no ``automil/config.yaml`` is findable, same as
+        before.
+
         Args:
             project_root: Path to the git repo root.  ``None`` → auto-detect
-                          by walking up from cwd (same as daemon default).
+                          by walking up from cwd at first daemon access.
             automil_dir:  Path to the ``automil/`` overlay directory.  ``None``
-                          → auto-detect by looking for ``automil/config.yaml``.
+                          → auto-detect at first daemon access.
         """
-        # Lazy import inside __init__ to avoid circular imports at module load.
-        # backends/__init__.py imports local.py; local.py must not import
-        # _orchestrator_daemon at module top-level to keep the import graph acyclic.
-        from automil.backends._orchestrator_daemon import ExperimentOrchestrator  # noqa: PLC0415
+        self._project_root_arg = project_root
+        self._automil_dir_arg = automil_dir
+        self._daemon_cache: object | None = None
 
-        self._daemon = ExperimentOrchestrator(
-            project_root=project_root,
-            automil_dir=automil_dir,
-        )
-        # Convenience shortcuts to the daemon's directory layout.
-        self._orch_dir: Path = self._daemon.orch_dir
-        self._queue_dir: Path = self._daemon.queue_dir
+    @property
+    def _daemon(self):
+        """Lazily construct the ExperimentOrchestrator on first access."""
+        if self._daemon_cache is None:
+            # Lazy import inside the property to avoid circular imports at module load.
+            # backends/__init__.py imports local.py; local.py must not import
+            # _orchestrator_daemon at module top-level to keep the import graph acyclic.
+            from automil.backends._orchestrator_daemon import ExperimentOrchestrator  # noqa: PLC0415
+
+            self._daemon_cache = ExperimentOrchestrator(
+                project_root=self._project_root_arg,
+                automil_dir=self._automil_dir_arg,
+            )
+        return self._daemon_cache
+
+    @property
+    def _orch_dir(self) -> Path:
+        return self._daemon.orch_dir
+
+    @property
+    def _queue_dir(self) -> Path:
+        return self._daemon.queue_dir
+
+    @property
+    def _running_dir(self) -> Path:
         # D-169: explicit namespaced path; was self._daemon.running_dir (flat).
         # running/local/ is the LocalBackend's exclusive namespace (Phase 6 BCK-05/06).
-        self._running_dir: Path = self._orch_dir / "running" / "local"
-        self._archive_dir: Path = self._daemon.archive_dir
+        return self._orch_dir / "running" / "local"
+
+    @property
+    def _archive_dir(self) -> Path:
+        return self._daemon.archive_dir
 
     # ------------------------------------------------------------------
     # Backend.submit  (D-55, D-77)

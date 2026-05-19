@@ -11,6 +11,8 @@ import logging
 import time
 from pathlib import Path
 
+import click
+
 from automil.cells.state import (
     Cell,
     CellStatus,
@@ -83,8 +85,19 @@ def get_or_create_cell(
 
 
 def get_cell(cell_id: str) -> Cell | None:
-    """Return Cell with the given cell_id, or None if not found."""
-    path = _cells_dir() / f"{cell_id}.json"
+    """Return Cell with the given cell_id, or None if not found.
+
+    Returns None gracefully when called from a non-project cwd (the
+    ``_cells_dir()`` lookup raises ``click.ClickException`` when no
+    ``automil/config.yaml`` is findable upward). Production callers that
+    *know* they're inside a project should pre-validate via
+    ``_find_automil_dir()`` if they want loud failures on misconfig.
+    """
+    try:
+        cells_dir = _cells_dir()
+    except click.ClickException:
+        return None
+    path = cells_dir / f"{cell_id}.json"
     if not path.exists():
         return None
     try:
@@ -102,10 +115,14 @@ def list_cells(cells_dir: Path | None = None) -> list[Cell]:
     project root (the orchestrator daemon has ``self.automil_dir``) — the
     ``_find_automil_dir()`` cwd-walk fallback only works when invoked from
     inside the consumer project, not from a tmp-path sandbox or another
-    cwd. Malformed cell files are skipped with ``logger.warning``.
+    cwd. Malformed cell files are skipped with ``logger.warning``. Returns
+    [] when invoked from a non-project cwd (cwd-walk failure is silent).
     """
     if cells_dir is None:
-        cells_dir = _cells_dir()
+        try:
+            cells_dir = _cells_dir()
+        except click.ClickException:
+            return []
     if not cells_dir.exists():
         return []
     cells: list[Cell] = []
