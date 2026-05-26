@@ -310,10 +310,13 @@ class ClassificationTrainer(BaseTrainer):
         elif hasattr(early_stopping, 'best_model_state'):
             self.model.load_state_dict(early_stopping.best_model_state)
             self.logger.info("Loaded best model from early stopping state")
-        
+
+        # NOTE: do NOT call torch.set_grad_enabled(False) here.  It is a
+        # thread-local *global* switch; leaving it off leaks into whatever runs
+        # next in the same process (e.g. a CLAM experiment whose backward()
+        # then fails).  Eval code below uses its own ``torch.no_grad()`` scope.
         self.model.eval()
-        torch.set_grad_enabled(False)
-        
+
         return self.model
     
     def evaluate(self, split='test'):
@@ -323,10 +326,12 @@ class ClassificationTrainer(BaseTrainer):
         
         loader = self.val_loader if split == 'val' else self.test_loader
         prefix = split.capitalize()
-        
+
+        # Grad is scoped by the ``with torch.no_grad()`` block below; we must
+        # not flip the thread-local global flag here, or it leaks into the next
+        # experiment running in the same process.
         self.model.eval()
-        torch.set_grad_enabled(False)
-        
+
         all_logits = []
         all_labels = []
         all_probs = []
