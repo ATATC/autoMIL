@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import gc
 import glob
@@ -296,6 +297,51 @@ def _prepare_nnmil_plans(
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
+def _isolated_torch_state():
+    """Isolate each experiment from process-global torch state set by the previous one.
+
+    The single-GPU runner — and multi-GPU workers recycled via
+    ``max_tasks_per_child`` — execute heterogeneous third-party trainers
+    back-to-back in one process.  Several relevant torch switches are
+    *thread-local globals*, not per-tensor/per-model state, so one trainer can
+    silently change the next one's behaviour:
+
+    * ``torch.set_grad_enabled`` — nnMIL's ``ClassificationTrainer.evaluate``
+      leaves grad **disabled** on return; the next CLAM experiment's first
+      ``backward()`` then raises "element 0 of tensors does not require grad
+      and does not have a grad_fn" (the original crash).
+    * ``torch.use_deterministic_algorithms`` — nnMIL's ``set_random_seeds``
+      enables it globally; CLAM never sets it, so a CLAM experiment that ran
+      *after* an nnMIL one would select different (deterministic) kernels than
+      one that ran first.  That makes a model's metrics depend on scheduling
+      order, which breaks benchmark fairness.
+
+    Restoring the canonical pristine state (grad on, deterministic-algorithms
+    off — the process defaults) on both entry and exit makes every experiment
+    behave as if it were the only one in a fresh process.  nnMIL re-applies its
+    own determinism inside its trainer ``__init__``, so this changes neither
+    nnMIL's metrics nor a first-run CLAM experiment's metrics — it only removes
+    the order-dependence.
+
+    Residual: ``CUBLAS_WORKSPACE_CONFIG`` (also set by nnMIL's
+    ``set_random_seeds``) is read by cuBLAS at context-creation time and cannot
+    be reliably reset mid-process; the multi-GPU path (one fresh process per
+    experiment) is the way to isolate that fully.
+    """
+    import torch  # local: keep torch out of the module-import path (see _gpu_worker)
+
+    def _pristine() -> None:
+        torch.set_grad_enabled(True)
+        torch.use_deterministic_algorithms(False)
+
+    _pristine()
+    try:
+        yield
+    finally:
+        _pristine()
+
+
 def _run_single_experiment_dispatch(
     exp_cfg: ExperimentConfig,
     benchmark_dir: str,
@@ -303,12 +349,13 @@ def _run_single_experiment_dispatch(
     wandb_project: str | None = None,
 ) -> dict:
     """Dispatch to CLAM or nnMIL runner based on framework."""
-    if exp_cfg.framework == Framework.NNMIL:
-        from autobench.pipeline.nnmil.runner import run_nnmil_experiment
-        return run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
-    else:
-        from autobench.pipeline.clam.runner import run_experiment
-        return run_experiment(exp_cfg, benchmark_dir, device, wandb_project)
+    with _isolated_torch_state():
+        if exp_cfg.framework == Framework.NNMIL:
+            from autobench.pipeline.nnmil.runner import run_nnmil_experiment
+            return run_nnmil_experiment(exp_cfg, benchmark_dir, device=str(device))
+        else:
+            from autobench.pipeline.clam.runner import run_experiment
+            return run_experiment(exp_cfg, benchmark_dir, device, wandb_project)
 
 
 # ---------------------------------------------------------------------------

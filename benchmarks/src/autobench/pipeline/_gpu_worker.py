@@ -60,6 +60,7 @@ def run_single_experiment(
 
     from autobench.pipeline.config import Framework
     from autobench.pipeline.orchestrator import (
+        _isolated_torch_state,
         _load_or_collect_summary,
         load_completed,
         mark_completed,
@@ -105,12 +106,16 @@ def run_single_experiment(
         print(f"[START] {exp_id} (free VRAM: {free_gb:.1f} GB)")
 
         # ---- Framework dispatch ----
-        if experiment.framework == Framework.NNMIL:
-            from autobench.pipeline.nnmil.runner import run_nnmil_experiment
-            summary = run_nnmil_experiment(experiment, benchmark_dir, device=str(device))
-        else:
-            from autobench.pipeline.clam.runner import run_experiment
-            summary = run_experiment(experiment, benchmark_dir, device, wandb_project)
+        # Recycled workers (max_tasks_per_child > 1) reuse one process across
+        # experiments, so isolate process-global torch state the same way the
+        # single-GPU path does (see orchestrator._isolated_torch_state).
+        with _isolated_torch_state():
+            if experiment.framework == Framework.NNMIL:
+                from autobench.pipeline.nnmil.runner import run_nnmil_experiment
+                summary = run_nnmil_experiment(experiment, benchmark_dir, device=str(device))
+            else:
+                from autobench.pipeline.clam.runner import run_experiment
+                summary = run_experiment(experiment, benchmark_dir, device, wandb_project)
 
         mark_completed(benchmark_dir, exp_id)
         return summary
