@@ -33,7 +33,7 @@
 #SBATCH --mail-user=terry.fu@projectneura.org
 
 # ==================== CONFIG ====================
-DATASET="${DATASET:-clwd}"
+DATASET="${DATASET:-cptac_coad}"
 FRAMEWORKS="${FRAMEWORKS:-clam nnmil}"
 PROJECT_DIR="/scratch/atatc/app/autoMIL"
 
