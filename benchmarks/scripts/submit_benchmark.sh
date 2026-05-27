@@ -20,7 +20,7 @@
 #   ENCODERS="conch_v15 hibou_l" TASKS="brca" sbatch benchmarks/scripts/submit_benchmark.sh
 
 #SBATCH --job-name=autobench_train
-#SBATCH --account=def-wanglab
+#SBATCH --account=rrg-jma
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -30,12 +30,12 @@
 #SBATCH --output=logs/bench_%x_%j.out
 #SBATCH --error=logs/bench_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=leo.yin@mail.utoronto.ca
+#SBATCH --mail-user=terry.fu@projectneura.org
 
 # ==================== CONFIG ====================
 DATASET="${DATASET:-clwd}"
 FRAMEWORKS="${FRAMEWORKS:-clam nnmil}"
-PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
+PROJECT_DIR="/scratch/atatc/app/autoMIL"
 
 # ==================== JOB INFO ====================
 echo "================================================"
