@@ -12,7 +12,7 @@
 #   sbatch benchmarks/scripts/submit_feature_extraction.sh tcga_luad --models virchow2 --skip_seg
 
 #SBATCH --job-name=wsi_extract
-#SBATCH --account=def-wanglab
+#SBATCH --account=rrg-jma
 #SBATCH --time=1-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -22,7 +22,7 @@
 #SBATCH --output=logs/extract_%x_%j.out
 #SBATCH --error=logs/extract_%x_%j.err
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --mail-user=leo.yin@mail.utoronto.ca
+#SBATCH --mail-user=terry.fu@projectneura.org
 #SBATCH --exclude=fc10512
 
 # ==================== DATASET ARG ====================
