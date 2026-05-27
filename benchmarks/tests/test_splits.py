@@ -9,7 +9,7 @@ import pytest
 from autobench.pipeline.config import (
     build_registries,
 )
-from autobench.pipeline.splits import create_strategy_splits
+from autobench.pipeline.splits import create_strategy_splits, _splits_standard_cv
 from _helpers import make_test_ds
 
 
@@ -124,6 +124,23 @@ class TestStandardCV:
             df1 = pd.read_csv(os.path.join(dir1, f"splits_{fold}.csv"))
             df2 = pd.read_csv(os.path.join(dir2, f"splits_{fold}.csv"))
             assert df1.equals(df2)
+
+    def test_accepts_arrow_backed_string_columns(self, tmp_path):
+        pytest.importorskip("pyarrow")
+
+        rows = []
+        for case_idx in range(40):
+            label = "pos" if case_idx % 2 == 0 else "neg"
+            rows.append({
+                "case_id": f"P{case_idx:03d}",
+                "slide_id": f"P{case_idx:03d}_slide0",
+                "label": label,
+            })
+        df = pd.DataFrame(rows).convert_dtypes(dtype_backend="pyarrow")
+
+        paths = _splits_standard_cv(df, str(tmp_path / "splits_arrow"), 4, 42)
+
+        assert len(paths) == 4
 
 
 class TestPatientLevelStratification:
