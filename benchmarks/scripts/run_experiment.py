@@ -186,6 +186,7 @@ def main() -> None:
         ds=ds,
         seed=train_cfg.seed,
         n_splits=args.n_folds,
+        task_names=[args.task],
     )
 
     # Run the experiment

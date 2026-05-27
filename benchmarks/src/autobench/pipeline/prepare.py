@@ -42,26 +42,68 @@ def create_task_csv(
     case_col = ds.case_id_column
 
     if _is_numeric_labels(df[label_col]):
-        df[label_col] = df[label_col].astype(int)
+        raw_labels = df[label_col].astype(int)
+        mapped_labels = raw_labels.map(label_map)
+        unmapped_mask = mapped_labels.isna()
+        if unmapped_mask.any():
+            dropped_unmapped = int(unmapped_mask.sum())
+            unmapped_counts = raw_labels[unmapped_mask].value_counts(
+                dropna=False
+            ).to_dict()
+            print(
+                f"  Dropping {dropped_unmapped} slides with unmapped "
+                f"{label_col} values: {unmapped_counts}"
+            )
+            df = df.loc[~unmapped_mask].copy()
+            mapped_labels = mapped_labels.loc[~unmapped_mask]
         task_df = pd.DataFrame({
             "case_id": df[case_col],
             "slide_id": df[slide_col].apply(ds.get_slide_id),
-            "label": df[label_col].map(label_map),
+            "label": mapped_labels,
         })
     else:
         # Labels are already strings (e.g., CLWD where CSV has "Acinar", "Solid", etc.)
         # label_map is {0: "Acinar", ...} -- we need reverse: {"Acinar": "Acinar", ...}
         # Just use the raw label values directly since they are already class names
+        allowed_labels = set(label_map.values())
+        known_mask = df[label_col].isin(allowed_labels)
+        if (~known_mask).any():
+            dropped_unmapped = int((~known_mask).sum())
+            unmapped_counts = df.loc[~known_mask, label_col].value_counts(
+                dropna=False
+            ).to_dict()
+            print(
+                f"  Dropping {dropped_unmapped} slides with unmapped "
+                f"{label_col} values: {unmapped_counts}"
+            )
+            df = df.loc[known_mask].copy()
         task_df = pd.DataFrame({
             "case_id": df[case_col],
             "slide_id": df[slide_col].apply(ds.get_slide_id),
             "label": df[label_col],
         })
 
+    if task_df.empty:
+        raise ValueError(
+            f"Task {label_col!r} has no labelled slides after applying "
+            f"label_map={label_map}. Check the dataset YAML and mapping CSV."
+        )
+    label_counts = task_df["label"].value_counts(dropna=False).to_dict()
+    if task_df["label"].isna().any():
+        raise ValueError(
+            f"Task {label_col!r} still contains missing labels after "
+            f"filtering. Label counts: {label_counts}"
+        )
+    if len(label_counts) < 2:
+        raise ValueError(
+            f"Task {label_col!r} has only one class after filtering: "
+            f"{label_counts}. Check the dataset YAML and mapping CSV."
+        )
+
     os.makedirs(os.path.dirname(output_csv), exist_ok=True)
     task_df.to_csv(output_csv, index=False)
     print(f"  Task CSV: {output_csv}  ({len(task_df)} slides, "
-          f"{task_df['label'].value_counts().to_dict()})")
+          f"{label_counts})")
     return task_df
 
 
@@ -87,6 +129,7 @@ def prepare_all(
     ds: DatasetConfig,
     seed: int = 42,
     n_splits: int = 5,
+    task_names: list[str] | None = None,
 ) -> None:
     """Run the complete data-preparation pipeline (idempotent).
 
@@ -97,7 +140,18 @@ def prepare_all(
     # Get default strategy (first one defined in the config)
     default_strategy = list(ds.split_strategies.keys())[0]
 
-    for task_name, tdef in ds.tasks.items():
+    task_names = task_names or list(ds.tasks.keys())
+    unknown_tasks = [
+        task_name for task_name in task_names if task_name not in ds.tasks
+    ]
+    if unknown_tasks:
+        raise ValueError(
+            f"Unknown task(s) requested for preparation: {unknown_tasks}. "
+            f"Valid tasks: {list(ds.tasks.keys())}"
+        )
+
+    for task_name in task_names:
+        tdef = ds.tasks[task_name]
         csv_path = os.path.join(benchmark_dir, "dataset_csv", f"{task_name}.csv")
         if not os.path.exists(csv_path):
             print(f"[prep] Creating task CSV: {task_name}")
@@ -110,6 +164,17 @@ def prepare_all(
         else:
             print(f"[prep] Task CSV already exists: {csv_path}")
             task_df = pd.read_csv(csv_path)
+            if task_df["label"].isna().any():
+                print(
+                    f"[prep] Existing task CSV has missing labels; "
+                    f"regenerating: {task_name}"
+                )
+                task_df = create_task_csv(
+                    mapping_csv, csv_path,
+                    label_col=tdef.label_col,
+                    label_map=tdef.label_map,
+                    ds=ds,
+                )
         all_slide_ids.update(task_df["slide_id"].tolist())
 
         splits_dir = os.path.join(benchmark_dir, "splits", default_strategy, task_name)

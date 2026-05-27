@@ -10,7 +10,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from autobench.pipeline.clam.prepare import convert_h5_to_pt
-from autobench.pipeline.prepare import create_task_csv
+from autobench.pipeline.prepare import create_task_csv, prepare_all
 from autobench.pipeline.splits import create_strategy_splits
 from _helpers import make_test_ds
 
@@ -125,6 +125,13 @@ class TestCreateTaskCsv:
         # HRD has pd.NA for i >= 15, so 5 rows dropped
         assert len(df) == 15
 
+    def test_drops_unmapped_numeric_labels(self, mapping_csv, tmp_path, ds):
+        out = str(tmp_path / "task.csv")
+        df = create_task_csv(mapping_csv, out, "HRD_label", {0: "neg", 1: "pos"}, ds)
+        assert len(df) == 10
+        assert not df["label"].isna().any()
+        assert set(df["label"].unique()) == {"neg", "pos"}
+
     def test_label_values_are_strings(self, mapping_csv, tmp_path, ds):
         out = str(tmp_path / "task.csv")
         df = create_task_csv(mapping_csv, out, "BRCA_predict_label", {0: "neg", 1: "pos"}, ds)
@@ -139,6 +146,24 @@ class TestCreateTaskCsv:
         out = str(tmp_path / "task.csv")
         df = create_task_csv(mapping_csv, out, "BRCA_predict_label", {0: "neg", 1: "pos"}, ds)
         assert len(df) == 20  # all 20 have BRCA labels
+
+
+class TestPrepareAll:
+    def test_honors_task_subset(self, mapping_csv, tmp_path, ds):
+        benchmark_dir = str(tmp_path / "benchmark")
+        prepare_all(
+            benchmark_dir=benchmark_dir,
+            mapping_csv=mapping_csv,
+            features_base_dir=str(tmp_path / "features"),
+            encoder_keys=[],
+            ds=ds,
+            seed=42,
+            n_splits=3,
+            task_names=["brca"],
+        )
+
+        assert os.path.exists(os.path.join(benchmark_dir, "dataset_csv", "brca.csv"))
+        assert not os.path.exists(os.path.join(benchmark_dir, "dataset_csv", "hrd.csv"))
 
 
 # ---------------------------------------------------------------------------
