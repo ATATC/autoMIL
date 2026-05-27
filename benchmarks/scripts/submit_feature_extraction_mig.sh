@@ -28,7 +28,7 @@ shift
 MODELS="$@"
 
 # ==================== CONFIG ====================
-PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
+PROJECT_DIR="/scratch/atatc/app/autoMIL"
 
 # ==================== JOB INFO ====================
 echo "================================================"

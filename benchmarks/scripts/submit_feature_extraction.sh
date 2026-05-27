@@ -29,7 +29,7 @@
 DATASET="${1:?Usage: sbatch $0 <dataset>  (e.g., clwd, ccrcc, ovarian)}"
 
 # ==================== CONFIG ====================
-PROJECT_DIR="/home/yinshuol/scratch/autoMIL/autoMIL"
+PROJECT_DIR="/scratch/atatc/app/autoMIL"
 
 # ==================== JOB INFO ====================
 echo "================================================"
