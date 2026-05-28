@@ -262,8 +262,9 @@ def main():
             patch_size=patch_size,
         )
         print(f"Patching complete. Coords dir: {coords_dir}")
+        coords_dir = os.path.relpath(coords_dir, output_dir)
     else:
-        coords_dir = os.path.join(output_dir, f"{mag}x_{patch_size}px_0px_overlap")
+        coords_dir = f"{mag}x_{patch_size}px_0px_overlap"
         print(f"Skipping segmentation/patching. Using coords dir: {coords_dir}")
 
     # Run feature extraction
